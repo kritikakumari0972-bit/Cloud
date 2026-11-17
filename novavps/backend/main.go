@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -112,6 +113,7 @@ type App struct {
 	loginHits     map[string][]time.Time
 	adminHash     []byte
 	adminUsername string
+	setupToken    string
 	setupMu       sync.Mutex
 }
 
@@ -160,6 +162,7 @@ func main() {
 		loginHits:     map[string][]time.Time{},
 		adminHash:     adminHash,
 		adminUsername: adminUsername,
+		setupToken:    os.Getenv("NOVAVPS_SETUP_TOKEN"),
 	}
 	if err := app.loadServers(); err != nil {
 		log.Fatal(err)
@@ -298,25 +301,30 @@ func (a *App) setupStatus(w http.ResponseWriter, r *http.Request) {
 	required := len(a.adminHash) == 0
 	username := a.adminUsername
 	a.mu.RUnlock()
-	jsonOut(w, http.StatusOK, map[string]any{"setupRequired": required, "username": username})
+	jsonOut(w, http.StatusOK, map[string]any{"setupRequired": required, "username": username, "setupTokenRequired": a.setupToken != ""})
 }
 
-// setupAdmin is intentionally restricted to a direct loopback connection.
-// For a remote installation, use an SSH port-forward to localhost before
-// creating the first administrator so an internet user cannot claim setup.
+// setupAdmin requires a one-time installer token when configured. Local
+// development without an installer token remains restricted to loopback.
 func (a *App) setupAdmin(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		jsonOut(w, http.StatusForbidden, map[string]string{"error": "cross_origin_request"})
-		return
-	}
-	if !isLoopbackRequest(r) {
-		jsonOut(w, http.StatusForbidden, map[string]string{"error": "setup_local_only", "message": "Create the first account from localhost or through an SSH port-forward."})
 		return
 	}
 	var body struct {
 		Username        string `json:"username"`
 		Password        string `json:"password"`
 		ConfirmPassword string `json:"confirmPassword"`
+		SetupToken      string `json:"setupToken"`
+	}
+	if a.setupToken != "" {
+		if subtle.ConstantTimeCompare([]byte(body.SetupToken), []byte(a.setupToken)) != 1 {
+			jsonOut(w, http.StatusForbidden, map[string]string{"error": "invalid_setup_token", "message": "Retrieve the one-time setup token on the NovaVPS host with: sudo novavps setup-token"})
+			return
+		}
+	} else if !isLoopbackRequest(r) {
+		jsonOut(w, http.StatusForbidden, map[string]string{"error": "setup_local_only", "message": "Create the first account from localhost or configure the one-time installer setup token."})
+		return
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
