@@ -110,6 +110,8 @@ type App struct {
 	loginMu       sync.Mutex
 	loginHits     map[string][]time.Time
 	adminHash     []byte
+	adminUsername string
+	setupMu       sync.Mutex
 }
 
 func main() {
@@ -125,6 +127,13 @@ func main() {
 	adminPassword, adminHash, createdAdminPassword, err := loadOrCreateAdminCredentials(filepath.Join(dataDir, "admin_password.hash"))
 	if err != nil {
 		log.Fatal(err)
+	}
+	adminUsername := ""
+	if len(adminHash) > 0 {
+		adminUsername, err = loadAdminUsername(filepath.Join(dataDir, "admin_username"))
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	addr := os.Getenv("NOVAVPS_ADDR")
@@ -148,6 +157,7 @@ func main() {
 		sessions:      map[string]time.Time{},
 		loginHits:     map[string][]time.Time{},
 		adminHash:     adminHash,
+		adminUsername: adminUsername,
 	}
 	if err := app.loadServers(); err != nil {
 		log.Fatal(err)
@@ -176,10 +186,15 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, http.StatusOK, map[string]any{"ok": true, "service": "novavps-api", "time": time.Now().UTC()})
 	})
+	mux.HandleFunc("GET /api/auth/setup-status", a.setupStatus)
+	mux.HandleFunc("POST /api/auth/setup", a.setupAdmin)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("POST /api/auth/logout", a.logout)
 	mux.Handle("GET /api/auth/me", a.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, http.StatusOK, map[string]any{"authenticated": true, "username": "admin"})
+		a.mu.RLock()
+		username := a.adminUsername
+		a.mu.RUnlock()
+		jsonOut(w, http.StatusOK, map[string]any{"authenticated": true, "username": username})
 	})))
 	mux.Handle("GET /api/servers", a.auth(http.HandlerFunc(a.listServers)))
 	mux.Handle("POST /api/servers/connect", a.auth(http.HandlerFunc(a.connectServer)))
@@ -262,6 +277,139 @@ func (a *App) auth(next http.Handler) http.Handler {
 	})
 }
 
+func (a *App) setupStatus(w http.ResponseWriter, r *http.Request) {
+	a.mu.RLock()
+	required := len(a.adminHash) == 0
+	username := a.adminUsername
+	a.mu.RUnlock()
+	jsonOut(w, http.StatusOK, map[string]any{"setupRequired": required, "username": username})
+}
+
+// setupAdmin is intentionally restricted to a direct loopback connection.
+// For a remote installation, use an SSH port-forward to localhost before
+// creating the first administrator so an internet user cannot claim setup.
+func (a *App) setupAdmin(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		jsonOut(w, http.StatusForbidden, map[string]string{"error": "cross_origin_request"})
+		return
+	}
+	if !isLoopbackRequest(r) {
+		jsonOut(w, http.StatusForbidden, map[string]string{"error": "setup_local_only", "message": "Create the first account from localhost or through an SSH port-forward."})
+		return
+	}
+	var body struct {
+		Username        string `json:"username"`
+		Password        string `json:"password"`
+		ConfirmPassword string `json:"confirmPassword"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
+		return
+	}
+	body.Username = strings.TrimSpace(body.Username)
+	if !validAdminUsername(body.Username) {
+		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "invalid_username", "message": "Username must be 3–32 characters: letters, numbers, dot, dash or underscore."})
+		return
+	}
+	if err := validateAdminPassword(body.Password); err != nil {
+		jsonOut(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if body.Password != body.ConfirmPassword {
+		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "passwords_do_not_match"})
+		return
+	}
+
+	a.setupMu.Lock()
+	defer a.setupMu.Unlock()
+	a.mu.RLock()
+	alreadyConfigured := len(a.adminHash) > 0
+	a.mu.RUnlock()
+	if alreadyConfigured {
+		jsonOut(w, http.StatusConflict, map[string]string{"error": "admin_already_configured"})
+		return
+	}
+	hashPath := filepath.Join(a.cfg.DataDir, "admin_password.hash")
+	if _, err := os.Stat(hashPath); err == nil {
+		jsonOut(w, http.StatusConflict, map[string]string{"error": "admin_already_configured"})
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "admin_storage_unavailable"})
+		return
+	}
+	if os.Getenv("NOVAVPS_ADMIN_PASSWORD") != "" {
+		jsonOut(w, http.StatusConflict, map[string]string{"error": "admin_already_configured"})
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
+	if err != nil {
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "password_hash_failed"})
+		return
+	}
+	usernamePath := filepath.Join(a.cfg.DataDir, "admin_username")
+	if err := os.WriteFile(usernamePath, []byte(body.Username), 0600); err != nil {
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "admin_storage_unavailable"})
+		return
+	}
+	if err := writeAdminPasswordHash(hashPath, hash); err != nil {
+		_ = os.Remove(usernamePath)
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "admin_storage_unavailable"})
+		return
+	}
+	token, err := randomToken(32)
+	if err != nil {
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "session_creation_failed"})
+		return
+	}
+	expiry := time.Now().Add(sessionLifetime)
+	a.mu.Lock()
+	a.adminUsername = body.Username
+	a.adminHash = hash
+	if a.sessions == nil {
+		a.sessions = map[string]time.Time{}
+	}
+	a.sessions[token] = expiry
+	a.mu.Unlock()
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookieName, Value: token, Path: "/", Expires: expiry,
+		MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, Secure: a.cfg.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+	jsonOut(w, http.StatusCreated, map[string]any{"ok": true, "username": body.Username})
+}
+
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+func validAdminUsername(username string) bool {
+	if len(username) < 3 || len(username) > 32 {
+		return false
+	}
+	for i, r := range username {
+		valid := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.'
+		if !valid || i == 0 && (r == '_' || r == '-' || r == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+func validateAdminPassword(password string) error {
+	if len([]rune(password)) < 12 {
+		return errors.New("password_too_short")
+	}
+	if len(password) > 72 {
+		return errors.New("password_too_long")
+	}
+	return nil
+}
+
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		jsonOut(w, http.StatusForbidden, map[string]string{"error": "cross_origin_request"})
@@ -275,11 +423,11 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}
-	if body.Username != "" && body.Username != "admin" {
-		a.loginFailed(w, r)
-		return
-	}
-	if a.rateLimited(r) || bcrypt.CompareHashAndPassword(a.adminHash, []byte(body.Password)) != nil {
+	a.mu.RLock()
+	adminUsername := a.adminUsername
+	adminHash := append([]byte(nil), a.adminHash...)
+	a.mu.RUnlock()
+	if adminUsername == "" || body.Username != adminUsername || a.rateLimited(r) || bcrypt.CompareHashAndPassword(adminHash, []byte(body.Password)) != nil {
 		a.loginFailed(w, r)
 		return
 	}
@@ -297,7 +445,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, Secure: a.cfg.CookieSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
-	jsonOut(w, http.StatusOK, map[string]any{"ok": true, "username": "admin"})
+	jsonOut(w, http.StatusOK, map[string]any{"ok": true, "username": adminUsername})
 }
 
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
@@ -1242,18 +1390,9 @@ func loadOrCreateAdminCredentials(path string) (string, []byte, bool, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return "", nil, false, err
 	}
-	password, err := randomToken(24)
-	if err != nil {
-		return "", nil, false, err
-	}
-	hash, err = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", nil, false, err
-	}
-	if err := writeAdminPasswordHash(path, hash); err != nil {
-		return "", nil, false, err
-	}
-	return password, hash, true, nil
+	// A clean local install waits for its owner to create an account in the
+	// first-run setup screen instead of generating a hidden default login.
+	return "", nil, false, nil
 }
 
 // writeAdminPasswordHash atomically stores the bcrypt hash with owner-only
@@ -1278,6 +1417,21 @@ func writeAdminPasswordHash(path string, hash []byte) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func loadAdminUsername(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "admin", nil // migrate installations created before custom usernames.
+	}
+	if err != nil {
+		return "", err
+	}
+	username := strings.TrimSpace(string(data))
+	if !validAdminUsername(username) {
+		return "", errors.New("stored admin username is invalid")
+	}
+	return username, nil
 }
 
 func randomToken(bytes int) (string, error) {
