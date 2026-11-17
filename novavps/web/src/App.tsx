@@ -3,7 +3,7 @@ import {
   Activity, ArrowUpRight, Check, ChevronRight, Cpu, Database, Globe2,
   HardDrive, KeyRound, LayoutDashboard, LockKeyhole, LogOut, Menu,
   Network, Plus, RefreshCw, Server, ShieldCheck, TerminalSquare, Trash2,
-  X, Zap,
+  Users, X, Zap,
 } from 'lucide-react'
 
 type ServerRecord = {
@@ -12,6 +12,7 @@ type ServerRecord = {
 }
 type Pool = { id: string; name: string; cidr: string; gateway?: string; family: string; createdAt: string }
 type Allocation = { id: string; poolId: string; address: string; targetType: string; targetId: string; createdAt: string }
+type PanelUser = { id: string; username: string; serverIds: string[]; createdAt: string }
 type Metrics = Record<string, string>
 type CommandRun = {
   id: string; serverName: string; command: string; output: string
@@ -22,7 +23,7 @@ type ConnectValues = {
   name: string; host: string; port: number; username: string; authMethod: string
   password: string; privateKey: string; keyPassphrase: string
 }
-type Page = 'overview' | 'servers' | 'network' | 'terminal'
+type Page = 'overview' | 'servers' | 'network' | 'terminal' | 'users'
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
@@ -59,6 +60,12 @@ function App() {
   const [password, setPassword] = useState('')
   const [setupRequired, setSetupRequired] = useState(false)
   const [authUsername, setAuthUsername] = useState('admin')
+  const [authRole, setAuthRole] = useState<'owner' | 'user'>('owner')
+  const [users, setUsers] = useState<PanelUser[]>([])
+  const [newUserUsername, setNewUserUsername] = useState('')
+  const [newUserPassword, setNewUserPassword] = useState('')
+  const [newUserServerIds, setNewUserServerIds] = useState<string[]>([])
+  const [createdLoginUrl, setCreatedLoginUrl] = useState('')
   const [setupUsername, setSetupUsername] = useState('admin')
   const [setupPassword, setSetupPassword] = useState('')
   const [setupConfirmPassword, setSetupConfirmPassword] = useState('')
@@ -87,27 +94,36 @@ function App() {
   const [commandBusy, setCommandBusy] = useState(false)
   const [commandRuns, setCommandRuns] = useState<CommandRun[]>([])
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (ownerAccess: boolean = authRole === 'owner') => {
     setLoading(true)
     setError('')
     try {
-      const [serverData, poolData, allocationData] = await Promise.all([
-        api<{ servers: ServerRecord[] }>('/api/servers'),
-        api<{ pools: Pool[] }>('/api/network/pools'),
-        api<{ allocations: Allocation[] }>('/api/network/allocations'),
-      ])
+      const serverData = await api<{ servers: ServerRecord[] }>('/api/servers')
       setServers(serverData.servers || [])
       setCommandServerId(current => serverData.servers?.some(server => server.id === current) ? current : serverData.servers?.[0]?.id || '')
-      setPools(poolData.pools || [])
-      setAllocations(allocationData.allocations || [])
+      if (ownerAccess) {
+        const [poolData, allocationData, userData] = await Promise.all([
+          api<{ pools: Pool[] }>('/api/network/pools'),
+          api<{ allocations: Allocation[] }>('/api/network/allocations'),
+          api<{ users: PanelUser[] }>('/api/users'),
+        ])
+        setPools(poolData.pools || [])
+        setAllocations(allocationData.allocations || [])
+        setUsers(userData.users || [])
+      } else {
+        setPools([]); setAllocations([]); setUsers([])
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load NovaVPS data')
     } finally { setLoading(false) }
-  }, [])
+  }, [authRole])
 
   useEffect(() => {
-    api<{ authenticated: boolean; username: string }>('/api/auth/me')
-      .then(result => { setAuthUsername(result.username || 'admin'); setAuthenticated(true); void loadData() })
+    api<{ authenticated: boolean; username: string; role?: 'owner' | 'user' }>('/api/auth/me')
+      .then(result => {
+        const role = result.role || 'owner'
+        setAuthUsername(result.username || 'admin'); setAuthRole(role); setAuthenticated(true); void loadData(role === 'owner')
+      })
       .catch(() => {
         api<{ setupRequired: boolean; username?: string }>('/api/auth/setup-status')
           .then(result => {
@@ -141,8 +157,9 @@ function App() {
     event.preventDefault()
     setBusy(true); setError('')
     try {
-      await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: authUsername, password }) })
-      setAuthenticated(true); setPassword(''); await loadData()
+      const result = await api<{ role?: 'owner' | 'user' }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: authUsername, password }) })
+      const role = result.role || 'owner'
+      setAuthRole(role); setAuthenticated(true); setPassword(''); await loadData(role === 'owner')
     } catch (e) { setError(e instanceof Error ? e.message : 'Sign-in failed') }
     finally { setBusy(false) }
   }
@@ -156,11 +173,12 @@ function App() {
         body: JSON.stringify({ username: setupUsername, password: setupPassword, confirmPassword: setupConfirmPassword }),
       })
       setAuthUsername(setupUsername.trim())
+      setAuthRole('owner')
       setSetupRequired(false)
       setPassword(setupPassword)
       setSetupPassword(''); setSetupConfirmPassword('')
       await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: setupUsername.trim(), password: setupPassword }) })
-      setAuthenticated(true); setPassword(''); await loadData()
+      setAuthenticated(true); setPassword(''); await loadData(true)
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not create administrator account') }
     finally { setBusy(false) }
   }
@@ -214,6 +232,37 @@ function App() {
     } finally { setCommandBusy(false) }
   }
 
+  async function createPanelUser(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true); setError(''); setNotice(''); setCreatedLoginUrl('')
+    try {
+      await api('/api/users', {
+        method: 'POST',
+        body: JSON.stringify({ username: newUserUsername.trim(), password: newUserPassword, serverIds: newUserServerIds }),
+      })
+      setCreatedLoginUrl(window.location.origin)
+      setNotice('Panel account created. Share the login URL and credentials with the user through a secure channel.')
+      setNewUserUsername(''); setNewUserPassword(''); setNewUserServerIds([])
+      await loadData(true)
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not create panel account') }
+    finally { setBusy(false) }
+  }
+
+  async function deletePanelUser(user: PanelUser) {
+    if (!window.confirm('Delete the panel account "' + user.username + '"? Their active sessions will be revoked.')) return
+    setBusy(true); setError('')
+    try {
+      await api('/api/users/' + encodeURIComponent(user.id), { method: 'DELETE' })
+      setNotice('Panel account deleted and active sessions revoked.')
+      await loadData(true)
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not delete panel account') }
+    finally { setBusy(false) }
+  }
+
+  function toggleUserServer(serverId: string) {
+    setNewUserServerIds(current => current.includes(serverId) ? current.filter(id => id !== serverId) : [...current, serverId])
+  }
+
   async function addPool(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError('')
     try {
@@ -257,7 +306,7 @@ function App() {
 
   async function logout() {
     await api('/api/auth/logout', { method: 'POST', body: '{}' }).catch(() => undefined)
-    setAuthenticated(false); setServers([]); setPools([]); setAllocations([])
+    setAuthenticated(false); setServers([]); setPools([]); setAllocations([]); setUsers([]); setAuthRole('owner')
   }
 
   if (authenticated === null) return <div className="boot-screen"><div className="brand-mark">N</div><span>Loading NovaVPS…</span></div>
@@ -298,11 +347,12 @@ function App() {
       <aside className={`sidebar ${mobileMenu ? 'sidebar-open' : ''}`}>
         <div className="brand-row sidebar-brand"><div className="brand-mark">N</div><div><b>NovaVPS</b><span>CONTROL CENTER</span></div><button className="icon-button mobile-close" onClick={() => setMobileMenu(false)} aria-label="Close menu"><X size={18} /></button></div>
         <div className="workspace-label">WORKSPACE</div>
-        <div className="workspace-card"><div className="workspace-avatar">{authUsername.slice(0, 1).toUpperCase()}</div><div><b>{authUsername}</b><span>Personal workspace</span></div><span className="online-dot" /></div>
+        <div className="workspace-card"><div className="workspace-avatar">{authUsername.slice(0, 1).toUpperCase()}</div><div><b>{authUsername}</b><span>{authRole === 'owner' ? 'Owner account' : 'Assigned server access'}</span></div><span className="online-dot" /></div>
         <div className="nav-label">MANAGE</div>
         <button className={`nav-item ${page === 'overview' ? 'active' : ''}`} onClick={() => { setPage('overview'); setMobileMenu(false) }}><LayoutDashboard size={18} /> Overview</button>
         <button className={`nav-item ${page === 'servers' ? 'active' : ''}`} onClick={() => { setPage('servers'); setMobileMenu(false) }}><Server size={18} /> Servers <span className="nav-count">{servers.length}</span></button>
-        <button className={`nav-item ${page === 'network' ? 'active' : ''}`} onClick={() => { setPage('network'); setMobileMenu(false) }}><Network size={18} /> Networking</button>
+        {authRole === 'owner' && <button className={`nav-item ${page === 'network' ? 'active' : ''}`} onClick={() => { setPage('network'); setMobileMenu(false) }}><Network size={18} /> Networking</button>}
+        {authRole === 'owner' && <button className={`nav-item ${page === 'users' ? 'active' : ''}`} onClick={() => { setPage('users'); setMobileMenu(false) }}><Users size={18} /> User accounts <span className="nav-count">{users.length}</span></button>}
         <div className="nav-label nav-label-lower">TOOLS</div>
         <button className={page === 'terminal' ? 'nav-item active' : 'nav-item'} onClick={() => { setPage('terminal'); setMobileMenu(false) }}><TerminalSquare size={18} /> Command runner</button>
         <div className="nav-disabled"><HardDrive size={18} /> File manager <span>SOON</span></div>
@@ -316,15 +366,15 @@ function App() {
       {mobileMenu && <button className="mobile-scrim" onClick={() => setMobileMenu(false)} aria-label="Close navigation" />}
       <main className="main-area">
         <header className="topbar">
-          <div className="topbar-left"><button className="icon-button menu-toggle" onClick={() => setMobileMenu(true)} aria-label="Open menu"><Menu size={20} /></button><div className="breadcrumb">NovaVPS <ChevronRight size={14} /> <b>{page === 'overview' ? 'Overview' : page === 'servers' ? 'Servers' : page === 'network' ? 'Networking' : 'Command runner'}</b></div></div>
-          <div className="topbar-actions"><div className="connection-status"><span className="online-dot" /> API connected</div><button className="icon-button" title="Refresh data" onClick={() => void loadData()}><RefreshCw size={17} className={loading ? 'spin' : ''} /></button><div className="avatar-small">A</div></div>
+          <div className="topbar-left"><button className="icon-button menu-toggle" onClick={() => setMobileMenu(true)} aria-label="Open menu"><Menu size={20} /></button><div className="breadcrumb">NovaVPS <ChevronRight size={14} /> <b>{page === 'overview' ? 'Overview' : page === 'servers' ? 'Servers' : page === 'network' ? 'Networking' : page === 'users' ? 'User accounts' : 'Command runner'}</b></div></div>
+          <div className="topbar-actions"><div className="connection-status"><span className="online-dot" /> API connected</div><button className="icon-button" title="Refresh data" onClick={() => void loadData()}><RefreshCw size={17} className={loading ? 'spin' : ''} /></button><div className="avatar-small">{authUsername.slice(0, 1).toUpperCase()}</div></div>
         </header>
 
         <div className="page-wrap">
           {(error || notice) && <div className={`toast ${error ? 'toast-error' : 'toast-success'}`}>{error ? <X size={16} /> : <Check size={16} />}{error || notice}<button onClick={() => { setError(''); setNotice('') }} aria-label="Dismiss"><X size={15} /></button></div>}
 
           {page === 'overview' && <>
-            <div className="page-heading"><div><div className="eyebrow">YOUR INFRASTRUCTURE</div><h1>Good to see you, Admin.</h1><p>Here’s what’s happening across your connected machines.</p></div><button className="primary-button" onClick={() => setConnectOpen(true)}><Plus size={17} /> Connect server</button></div>
+            <div className="page-heading"><div><div className="eyebrow">YOUR INFRASTRUCTURE</div><h1>Good to see you, {authUsername}.</h1><p>{authRole === 'owner' ? 'Here’s what’s happening across your connected machines.' : 'These are the machines assigned to your account.'}</p></div>{authRole === 'owner' && <button className="primary-button" onClick={() => setConnectOpen(true)}><Plus size={17} /> Connect server</button>}</div>
             <section className="stat-grid">
               <StatCard icon={<Server />} label="Connected servers" value={String(totals.servers)} note="Across all providers" accent="blue" />
               <StatCard icon={<Globe2 />} label="IPv4 reservations" value={String(totals.ipv4)} note="Inventory records only" accent="purple" />
@@ -334,11 +384,11 @@ function App() {
             <section className="content-grid">
               <div className="panel-card server-panel"><div className="card-heading"><div><h2>Connected servers</h2><p>Recently added infrastructure</p></div><button className="text-button" onClick={() => setPage('servers')}>View all <ArrowUpRight size={15} /></button></div>
                 {servers.length === 0 ? <EmptyState icon={<Server size={24} />} title="No servers connected yet" description="Connect a VPS or Linux machine using SSH. No NovaVPS agent is required for the basic connection." action={<button className="secondary-button" onClick={() => setConnectOpen(true)}><Plus size={15} /> Add your first server</button>} /> :
-                  <div className="server-list">{servers.slice(0, 5).map(server => <ServerRow key={server.id} server={server} onMetrics={() => void refreshMetrics(server.id)} metrics={metrics[server.id]} onRemove={() => void removeServer(server.id)} />)}</div>}
+                  <div className="server-list">{servers.slice(0, 5).map(server => <ServerRow key={server.id} server={server} onMetrics={() => void refreshMetrics(server.id)} metrics={metrics[server.id]} canManage={authRole === 'owner'} onRemove={() => void removeServer(server.id)} />)}</div>}
               </div>
               <div className="panel-card quick-panel"><div className="card-heading"><div><h2>Quick actions</h2><p>Common management tasks</p></div><Zap size={18} className="muted-icon" /></div>
-                <button className="quick-action" onClick={() => setConnectOpen(true)}><span className="quick-icon quick-blue"><Plus size={18} /></span><span><b>Connect a server</b><small>Add a VPS over SSH</small></span><ChevronRight size={17} /></button>
-                <button className="quick-action" onClick={() => { setPage('network'); setPoolOpen(true) }}><span className="quick-icon quick-purple"><Globe2 size={18} /></span><span><b>Add IP address pool</b><small>Register an authorized CIDR</small></span><ChevronRight size={17} /></button>
+                {authRole === 'owner' && <button className="quick-action" onClick={() => setConnectOpen(true)}><span className="quick-icon quick-blue"><Plus size={18} /></span><span><b>Connect a server</b><small>Add a VPS over SSH</small></span><ChevronRight size={17} /></button>}
+                {authRole === 'owner' && <button className="quick-action" onClick={() => { setPage('network'); setPoolOpen(true) }}><span className="quick-icon quick-purple"><Globe2 size={18} /></span><span><b>Add IP address pool</b><small>Register an authorized CIDR</small></span><ChevronRight size={17} /></button>}
                 <div className="notice-box"><ShieldCheck size={17} /><div><b>Host-key verification</b><p>NovaVPS pins each SSH host fingerprint after you verify it independently.</p></div></div>
               </div>
             </section>
@@ -346,13 +396,41 @@ function App() {
           </>}
 
           {page === 'servers' && <>
-            <div className="page-heading"><div><div className="eyebrow">INFRASTRUCTURE</div><h1>Your servers</h1><p>Manage all connected VPS and Linux machines from one place.</p></div><button className="primary-button" onClick={() => setConnectOpen(true)}><Plus size={17} /> Connect server</button></div>
+            <div className="page-heading"><div><div className="eyebrow">INFRASTRUCTURE</div><h1>Your servers</h1><p>{authRole === 'owner' ? 'Manage all connected VPS and Linux machines from one place.' : 'Only machines assigned to your account are shown here.'}</p></div>{authRole === 'owner' && <button className="primary-button" onClick={() => setConnectOpen(true)}><Plus size={17} /> Connect server</button>}</div>
             <div className="filter-row"><div className="filter-search"><Server size={16} /><span>All connected servers</span><b>{servers.length}</b></div><button className="secondary-button" onClick={() => void loadData()}><RefreshCw size={15} /> Refresh</button></div>
             <div className="panel-card full-table">
               {servers.length === 0 ? <EmptyState icon={<Server size={24} />} title="Your server list is empty" description="Connect a Linux server with its SSH host, username and authentication method." action={<button className="primary-button" onClick={() => setConnectOpen(true)}><Plus size={15} /> Connect server</button>} /> :
-                <div className="server-list">{servers.map(server => <ServerRow key={server.id} server={server} onMetrics={() => void refreshMetrics(server.id)} metrics={metrics[server.id]} onRemove={() => void removeServer(server.id)} />)}</div>}
+                <div className="server-list">{servers.map(server => <ServerRow key={server.id} server={server} onMetrics={() => void refreshMetrics(server.id)} metrics={metrics[server.id]} canManage={authRole === 'owner'} onRemove={() => void removeServer(server.id)} />)}</div>}
             </div>
             <p className="page-footnote"><ShieldCheck size={14} /> SSH host keys are checked on every connection. Removing a server only deletes its NovaVPS record; it does not modify the remote machine.</p>
+          </>}
+
+          {page === 'users' && authRole === 'owner' && <>
+            <div className="page-heading"><div><div className="eyebrow">ACCESS MANAGEMENT</div><h1>Panel user accounts</h1><p>Create or remove login accounts and choose which machines each person can control.</p></div><span className="count-pill">{users.length} accounts</span></div>
+            <section className="panel-card user-create-card">
+              <div className="card-heading"><div><h2>Create user account</h2><p>Each account has its own password and server access list.</p></div><Users size={19} className="muted-icon" /></div>
+              <form className="stack-form" onSubmit={createPanelUser}>
+                <div className="form-two">
+                  <label>Username<input value={newUserUsername} onChange={e => setNewUserUsername(e.target.value)} minLength={3} maxLength={32} placeholder="e.g. alex" autoComplete="off" required /></label>
+                  <label>Temporary password<input type="password" value={newUserPassword} onChange={e => setNewUserPassword(e.target.value)} minLength={12} maxLength={72} placeholder="At least 12 characters" autoComplete="new-password" required /></label>
+                </div>
+                <div className="user-server-assignment">
+                  <div><b>Assign machines</b><small>Users can only see and run commands on selected machines.</small></div>
+                  {servers.length === 0 ? <p className="empty-inline">Connect a server before creating a user with machine access.</p> : <div className="user-server-checks">{servers.map(server => <label className="user-server-check" key={server.id}><input type="checkbox" checked={newUserServerIds.includes(server.id)} onChange={() => toggleUserServer(server.id)} /><span><b>{server.name}</b><small>{server.username}@{server.host}</small></span></label>)}</div>}
+                </div>
+                <div className="user-create-footer"><span>Login URL: <code>{window.location.origin}/</code></span><button className="primary-button" disabled={busy || !newUserUsername.trim() || newUserPassword.length < 12 || servers.length === 0 || newUserServerIds.length === 0}><Plus size={16} /> {busy ? 'Creating…' : 'Create account'}</button></div>
+                {createdLoginUrl && <div className="created-login-url"><Check size={16} /><span>Share this login page with the user: <a href={createdLoginUrl} target="_blank" rel="noreferrer">{createdLoginUrl}</a></span></div>}
+              </form>
+            </section>
+            <section className="panel-card user-list-card">
+              <div className="card-heading"><div><h2>Existing accounts</h2><p>Deleting an account immediately revokes its active sessions.</p></div><span className="count-pill">{users.length} users</span></div>
+              {users.length === 0 ? <div className="empty-inline">No additional panel accounts created yet.</div> : <div className="panel-user-list">{users.map(user => <article className="panel-user-row" key={user.id}>
+                <div className="panel-user-avatar">{user.username.slice(0, 1).toUpperCase()}</div>
+                <div className="panel-user-details"><b>{user.username}</b><small>{user.serverIds.length} assigned machine{user.serverIds.length === 1 ? '' : 's'} · created {timeAgo(user.createdAt)}</small><div className="user-assigned-tags">{user.serverIds.map(id => <span key={id}>{servers.find(server => server.id === id)?.name || 'Removed machine'}</span>)}</div></div>
+                <button className="icon-button danger-icon" onClick={() => void deletePanelUser(user)} title={'Delete ' + user.username}><Trash2 size={16} /></button>
+              </article>)}</div>}
+            </section>
+            <div className="network-alert"><ShieldCheck size={18} /><div><b>Machine permissions follow the saved SSH account</b><p>The command runner executes as the SSH username configured for each machine. If that SSH login is root, commands run with root privileges on that machine. Keep account passwords private and assign access only to people you trust.</p></div></div>
           </>}
 
           {page === 'terminal' && <>
@@ -441,7 +519,7 @@ function StatCard({ icon, label, value, note, accent }: { icon: ReactNode; label
 function EmptyState({ icon, title, description, action }: { icon: React.ReactNode; title: string; description: string; action?: ReactNode }) {
   return <div className="empty-state"><div className="empty-icon">{icon}</div><b>{title}</b><p>{description}</p>{action}</div>
 }
-function ServerRow({ server, metrics, onMetrics, onRemove }: { server: ServerRecord; metrics?: Metrics; onMetrics: () => void; onRemove: () => void }) {
-  return <div className="server-row"><div className="server-avatar"><Server size={19} /></div><div className="server-info"><b>{server.name}</b><span>{server.username}@{server.host}:{server.port}</span><small><span className="online-dot" /> SSH enrolled · {timeAgo(server.addedAt)}</small>{metrics && <div className="metrics-strip"><span><Cpu size={13} /> {metrics.cpu_cores || '—'} cores</span><span><Activity size={13} /> RAM {bytes(metrics.mem_available)} free</span><span><HardDrive size={13} /> {bytes(metrics.disk_used)} used</span><span>Up {metrics.uptime ? `${Math.floor(Number(metrics.uptime) / 3600)}h` : '—'}</span></div>}</div><div className="server-actions"><span className="status-pill"><span className="online-dot" /> Saved</span><button className="secondary-button compact-button" onClick={onMetrics}><Activity size={14} /> Check metrics</button><button className="icon-button danger-icon" onClick={onRemove} title="Remove server"><Trash2 size={15} /></button></div></div>
+function ServerRow({ server, metrics, onMetrics, onRemove, canManage = false }: { server: ServerRecord; metrics?: Metrics; onMetrics: () => void; onRemove: () => void; canManage?: boolean }) {
+  return <div className="server-row"><div className="server-avatar"><Server size={19} /></div><div className="server-info"><b>{server.name}</b><span>{server.username}@{server.host}:{server.port}</span><small><span className="online-dot" /> SSH enrolled · {timeAgo(server.addedAt)}</small>{metrics && <div className="metrics-strip"><span><Cpu size={13} /> {metrics.cpu_cores || '—'} cores</span><span><Activity size={13} /> RAM {bytes(metrics.mem_available)} free</span><span><HardDrive size={13} /> {bytes(metrics.disk_used)} used</span><span>Up {metrics.uptime ? `${Math.floor(Number(metrics.uptime) / 3600)}h` : '—'}</span></div>}</div><div className="server-actions"><span className="status-pill"><span className="online-dot" /> Saved</span><button className="secondary-button compact-button" onClick={onMetrics}><Activity size={14} /> Check metrics</button>{canManage && <button className="icon-button danger-icon" onClick={onRemove} title="Remove server"><Trash2 size={15} /></button>}</div></div>
 }
 export default App
