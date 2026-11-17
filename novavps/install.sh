@@ -127,6 +127,21 @@ tar -C "$SOURCE_DIR" \
 [[ -f "$INSTALL_DIR/.env" ]] || install -m 0600 "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
 chmod 0600 "$INSTALL_DIR/.env"
 
+# Protect first-owner setup even when Docker's bridge address makes the
+# browser request appear non-loopback inside the API container. Preserve this
+# secret across upgrades and expose it only through the root-only CLI command.
+SETUP_TOKEN="$(sed -n 's/^NOVAVPS_SETUP_TOKEN=//p' "$INSTALL_DIR/.env" | tail -n1)"
+if [[ -z "$SETUP_TOKEN" ]]; then
+  SETUP_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  [[ "${#SETUP_TOKEN}" -eq 64 ]] || fail "Could not generate the first-run setup token."
+  if grep -q '^NOVAVPS_SETUP_TOKEN=' "$INSTALL_DIR/.env"; then
+    sed -i "s|^NOVAVPS_SETUP_TOKEN=.*|NOVAVPS_SETUP_TOKEN=${SETUP_TOKEN}|" "$INSTALL_DIR/.env"
+  else
+    printf '\nNOVAVPS_SETUP_TOKEN=%s\n' "$SETUP_TOKEN" >> "$INSTALL_DIR/.env"
+  fi
+fi
+chmod 0600 "$INSTALL_DIR/.env"
+
 if [[ "$PUBLIC_MODE" -eq 1 ]]; then
   if grep -q '^NOVAVPS_DOMAIN=' "$INSTALL_DIR/.env"; then
     sed -i "s|^NOVAVPS_DOMAIN=.*|NOVAVPS_DOMAIN=${DOMAIN}|" "$INSTALL_DIR/.env"
@@ -178,6 +193,7 @@ else
 fi
 printf "${GREEN}Management command:${NC} novavps\n"
 printf "${GREEN}First-run account setup:${NC} open the panel and create your owner username and password.\n"
+printf "${GREEN}Setup token command:${NC} sudo novavps setup-token (keep this secret).\n"
 printf "${GREEN}Additional accounts:${NC} sign in as owner, then open User accounts in the panel sidebar.\n"
 if [[ -f "$INSTALL_DIR/.public-mode" ]]; then
   printf "${YELLOW}Setup access:${NC} create an SSH tunnel to localhost before creating the first account.\n"
