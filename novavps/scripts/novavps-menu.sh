@@ -79,6 +79,17 @@ users_cmd() {
   fi
 }
 
+setup_token_cmd() {
+  [[ "$EUID" -eq 0 ]] || { fail "Run this as root: sudo novavps setup-token"; return 1; }
+  local token
+  token=$(sed -n 's/^NOVAVPS_SETUP_TOKEN=//p' "$APP_DIR/.env" | tail -n1)
+  [[ -n "$token" ]] || { fail "No installer setup token is configured. Check $APP_DIR/.env."; return 1; }
+  echo -e "${YELLOW}One-time NovaVPS first-owner setup token:${NC}"
+  printf '%s\n' "$token"
+  echo
+  warn "Treat this token like a password. Do not share it or post it publicly."
+}
+
 backup_cmd() {
   local container_id volume_name stamp
   container_id=$(compose ps -q novavps | head -n1)
@@ -148,6 +159,7 @@ NovaVPS command
   novavps logs            Follow service logs
   novavps url             Show panel URL / SSH tunnel hint
   novavps users           Show the panel user-management page
+  novavps setup-token     Show the protected first-owner setup token (root only)
   novavps backup          Back up persistent application data
   novavps update          Update a Git checkout, if present
   novavps doctor          Print diagnostics
@@ -182,6 +194,7 @@ menu() {
     echo -e "  ${GREEN}5)${NC} Logs                ${GRAY}:: Follow application logs${NC}"
     echo -e "  ${GREEN}6)${NC} Panel URL           ${GRAY}:: Show access address${NC}"
     echo -e "  ${GREEN}12)${NC} User accounts       ${GRAY}:: Open account-management guidance${NC}"
+    echo -e "  ${GREEN}13)${NC} Setup token         ${GRAY}:: Show first-owner setup secret${NC}"
     echo ""
     echo -e "${YELLOW}  [ MAINTENANCE ]${NC}"
     echo -e "  ${GREEN}7)${NC} Backup data         ${GRAY}:: Save encrypted app data${NC}"
@@ -192,7 +205,7 @@ menu() {
     echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
     echo -e "  ${RED}0) Exit${NC}"
     echo
-    read -r -p "${GREEN}➜ Select option [0-12]: ${NC}" choice
+    read -r -p "${GREEN}➜ Select option [0-13]: ${NC}" choice
     case "$choice" in
       1) start_cmd; pause ;;
       2) stop_cmd; pause ;;
@@ -206,6 +219,7 @@ menu() {
       10) uninstall_cmd; pause ;;
       11) purge_cmd; pause ;;
       12) users_cmd; pause ;;
+      13) setup_token_cmd; pause ;;
       0) echo -e "${GREEN}NovaVPS manager closed.${NC}"; exit 0 ;;
       *) warn "Invalid option."; sleep 1 ;;
     esac
@@ -221,6 +235,7 @@ case "${1:-menu}" in
   logs) logs_cmd ;;
   url) url_cmd ;;
   users) users_cmd ;;
+  setup-token) setup_token_cmd ;;
   backup) backup_cmd ;;
   update) update_cmd ;;
   doctor) doctor_cmd ;;
