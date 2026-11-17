@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -214,20 +213,6 @@ func (a *App) updateUser(w http.ResponseWriter, r *http.Request) {
 	err := a.savePanelUsersLocked()
 	if err != nil {
 		a.users[id] = previous
-		a.mu.Unlock()
-		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "user_storage_failed"})
-		return
-	}
-	if len(newHash) > 0 {
-		user.PasswordHash = newHash
-	}
-	a.users[id] = user
-	err := a.savePanelUsersLocked()
-	if err != nil {
-		a.users[id] = PanelUser{
-			ID: user.ID, Username: user.Username, PasswordHash: user.PasswordHash,
-			ServerIDs: serverIDs, CreatedAt: user.CreatedAt,
-		}
 		a.mu.Unlock()
 		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "user_storage_failed"})
 		return
