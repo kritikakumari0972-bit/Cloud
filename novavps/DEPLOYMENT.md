@@ -20,7 +20,7 @@ A Render Blueprint is provided at the repository root in `render.yaml`. It uses 
 2. Select the repository's root `render.yaml` if Render does not select it automatically.
 3. Review the service named `novavps-control-panel` and deploy it.
 4. Open the service URL after the `/api/health` health check passes.
-5. Save the generated administrator password shown in the service's first-start logs, unless you replace the environment variable with your own secret before deployment.
+5. In the Render service's **Environment** settings, open `NOVAVPS_ADMIN_PASSWORD` and copy its generated value. NovaVPS does not print an explicitly configured environment secret in logs. To choose your own password, replace this variable with a value of at least 12 characters and deploy again; the application will securely update its stored bcrypt hash at startup, even when a previous hash already exists. Keep this variable private.
 
 The blueprint selects Render's Free web-service plan to make evaluation possible without a required paid plan. Free services sleep after 15 minutes without inbound traffic and wake on the next request. **Render Free has an ephemeral filesystem: the current NovaVPS JSON data store, encryption key, saved SSH credentials, and local application state can be lost on a spin-down, restart, or redeploy. Do not use this free profile for important server credentials or production management.** Render documents these Free plan limitations at https://render.com/docs/free and https://render.com/docs/faq.
 
