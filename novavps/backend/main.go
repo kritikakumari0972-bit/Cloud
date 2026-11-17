@@ -358,7 +358,7 @@ func (a *App) connectServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	req.Host = strings.TrimSpace(req.Host)
+	req.Host = strings.Trim(strings.TrimSpace(req.Host), "[]")
 	req.Username = strings.TrimSpace(req.Username)
 	if req.Port == 0 {
 		req.Port = 22
@@ -947,12 +947,21 @@ func sameOrigin(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
-	host := r.Host
-	proto := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-		proto = "https"
+	// When Vercel/Netlify proxy the API, the public browser origin differs
+	// from the Go service hostname. Trust only forwarded host/proto values
+	// added by our same-origin deployment adapters.
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
 	}
-	return origin == proto+"://"+host || origin == "https://"+host
+	proto := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")))
+	if proto != "https" && proto != "http" {
+		proto = "http"
+		if r.TLS != nil {
+			proto = "https"
+		}
+	}
+	return origin == proto+"://"+host
 }
 
 func clientIP(r *http.Request) string {

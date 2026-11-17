@@ -35,7 +35,16 @@ export default async (request: Request): Promise<Response> => {
     }
 
     const target = new URL(incoming.pathname + incoming.search, origin.origin);
-    const upstreamRequest = new Request(target, request);
+    const forwardedHeaders = new Headers(request.headers);
+    forwardedHeaders.set("x-forwarded-host", incoming.host);
+    forwardedHeaders.set("x-forwarded-proto", incoming.protocol.slice(0, -1));
+    const upstreamRequest = new Request(target, {
+      method: request.method,
+      headers: forwardedHeaders,
+      body: request.body,
+      redirect: "manual",
+      duplex: "half",
+    } as RequestInit);
     const upstream = await fetch(upstreamRequest, { redirect: "manual" });
 
     const headers = new Headers(upstream.headers);

@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Activity, ArrowUpRight, Check, ChevronRight, Cpu, Database, Globe2,
   HardDrive, KeyRound, LayoutDashboard, LockKeyhole, LogOut, Menu,
@@ -338,10 +338,10 @@ function App() {
   )
 }
 
-function StatCard({ icon, label, value, note, accent }: { icon: React.ReactNode; label: string; value: string; note: string; accent: string }) {
+function StatCard({ icon, label, value, note, accent }: { icon: ReactNode; label: string; value: string; note: string; accent: string }) {
   return <div className="stat-card"><div className={`stat-icon ${accent}`}>{icon}</div><div className="stat-label">{label}</div><div className="stat-value">{value}</div><div className="stat-note">{note}</div></div>
 }
-function EmptyState({ icon, title, description, action }: { icon: React.ReactNode; title: string; description: string; action?: React.ReactNode }) {
+function EmptyState({ icon, title, description, action }: { icon: React.ReactNode; title: string; description: string; action?: ReactNode }) {
   return <div className="empty-state"><div className="empty-icon">{icon}</div><b>{title}</b><p>{description}</p>{action}</div>
 }
 function ServerRow({ server, metrics, onMetrics, onRemove }: { server: ServerRecord; metrics?: Metrics; onMetrics: () => void; onRemove: () => void }) {
