@@ -10,6 +10,7 @@ WORKDIR /src/backend
 COPY backend/go.mod ./go.mod
 RUN go mod tidy
 COPY backend/ ./
+RUN go mod tidy && go mod verify
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/novavps .
 
 FROM alpine:3.22
