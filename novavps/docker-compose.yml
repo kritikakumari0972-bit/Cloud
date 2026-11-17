@@ -12,6 +12,7 @@ services:
       NOVAVPS_WEB_DIR: "/app/web/dist"
       NOVAVPS_COOKIE_SECURE: ${NOVAVPS_COOKIE_SECURE:-false}
       NOVAVPS_ADMIN_PASSWORD: ${NOVAVPS_ADMIN_PASSWORD:-}
+      NOVAVPS_SETUP_TOKEN: ${NOVAVPS_SETUP_TOKEN:-}
     volumes:
       - novavps_data:/app/data
 
