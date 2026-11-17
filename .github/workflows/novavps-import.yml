@@ -1,9 +1,10 @@
-name: Import NovaVPS source archive
+name: Import staged NovaVPS source archive
 
 on:
   push:
     branches: [main]
     paths:
+      - "novavps/_source/part-*.b64"
       - "novavps/_source/source.tar.gz.b64"
   workflow_dispatch:
 
@@ -18,47 +19,130 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Expand the NovaVPS release source
+      - name: Reassemble and validate the staged source archive
         shell: bash
         run: |
           python3 - <<'PY'
           import base64
           import gzip
           import io
+          import re
           import tarfile
-          from pathlib import Path, PurePosixPath
+          from pathlib import Path
 
-          archive = Path("novavps/_source/source.tar.gz.b64")
-          if not archive.is_file():
-              raise SystemExit("Source archive staging file is missing.")
+          staging = Path("novavps/_source")
+          direct = staging / "source.tar.gz.b64"
+          parts = sorted(
+              staging.glob("part-*.b64"),
+              key=lambda p: int(re.search(r"part-(\d+)", p.name).group(1)),
+          )
 
-          raw = base64.b64decode(archive.read_text().strip(), validate=True)
-          root = Path("novavps").resolve()
-          with tarfile.open(fileobj=io.BytesIO(gzip.decompress(raw)), mode="r:") as bundle:
-              for item in bundle.getmembers():
-                  rel = PurePosixPath(item.name)
-                  if rel.is_absolute() or not rel.parts or ".." in rel.parts:
-                      raise SystemExit(f"Unsafe archive path: {item.name}")
-                  destination = (root / Path(*rel.parts)).resolve()
-                  if destination != root and root not in destination.parents:
-                      raise SystemExit(f"Archive path escapes destination: {item.name}")
+          if direct.is_file():
+              encoded = direct.read_text(encoding="ascii").strip()
+          elif parts:
+              encoded = "".join(p.read_text(encoding="ascii").strip() for p in parts)
+          else:
+              raise SystemExit("No NovaVPS source archive or parts were found.")
+
+          def validate(candidate):
+              raw = base64.b64decode(candidate, validate=True)
+              packed = gzip.decompress(raw)  # checks the gzip CRC and trailer
+              with tarfile.open(fileobj=io.BytesIO(packed), mode="r:") as archive:
+                  members = archive.getmembers()
+                  if not members:
+                      raise ValueError("The source archive is empty.")
+                  for item in members:
+                      name = item.name.replace("\\", "/")
+                      if name.startswith("/") or ".." in Path(name).parts:
+                          raise ValueError(f"Unsafe archive path: {item.name}")
+                      if not (item.isfile() or item.isdir()):
+                          raise ValueError(f"Unsupported archive entry: {item.name}")
+              return packed, len(members)
+
+          try:
+              packed, member_count = validate(encoded)
+              repaired = False
+          except Exception as original_error:
+              # The staged 2,000-character chunks may contain a single extra
+              # character from an upload boundary. Try only the anomalous
+              # chunk(s), then accept a candidate only if gzip CRC and tar
+              # validation both succeed.
+              anomalous = [p for p in parts if len(p.read_text(encoding="ascii").strip()) % 4 != 0]
+              if not anomalous:
+                  raise SystemExit(f"Source archive validation failed: {original_error}")
+              matches = []
+              for part in anomalous:
+                  source = part.read_text(encoding="ascii").strip()
+                  for index in range(len(source)):
+                      fixed_part = source[:index] + source[index + 1:]
+                      candidate = "".join(
+                          fixed_part if p == part else p.read_text(encoding="ascii").strip()
+                          for p in parts
+                      )
+                      try:
+                          result, count = validate(candidate)
+                          matches.append((result, count))
+                          if len(matches) > 1:
+                              break
+                      except Exception:
+                          continue
+                  if len(matches) > 1:
+                      break
+              if len(matches) != 1:
+                  raise SystemExit(
+                      "Could not unambiguously recover the staged source archive; "
+                      f"found {len(matches)} valid candidates."
+                  )
+              packed, member_count = matches[0]
+              repaired = True
+
+          extract_root = Path("novavps").resolve()
+          temp_root = Path("/tmp/novavps-source-import").resolve()
+          temp_root.mkdir(parents=True, exist_ok=True)
+          with tarfile.open(fileobj=io.BytesIO(packed), mode="r:") as archive:
+              for item in archive.getmembers():
+                  parts_path = Path(item.name.replace("\\", "/"))
+                  clean_parts = [part for part in parts_path.parts if part not in ("", ".", "/")]
+                  if clean_parts and clean_parts[0] == "novavps":
+                      clean_parts = clean_parts[1:]
+                  if not clean_parts:
+                      continue
+                  relative = Path(*clean_parts)
+                  if relative.parts[0] == "_source":
+                      continue
+
+                  # Preserve the deployment integrations added in v0.4.0-dev.
+                  posix = relative.as_posix()
+                  keep = (
+                      posix in {
+                          "README.md", "VERSION", "DEPLOYMENT.md",
+                          "DEPLOYMENT-CHANGELOG.md", ".nvmrc",
+                          "vercel.json", "netlify.toml", "render.yaml",
+                      }
+                      or posix.startswith("api/")
+                      or posix.startswith("netlify/")
+                  )
+                  if keep:
+                      continue
+
+                  destination = (extract_root / relative).resolve()
+                  if destination != extract_root and extract_root not in destination.parents:
+                      raise SystemExit(f"Archive path escapes NovaVPS root: {item.name}")
                   if item.isdir():
                       destination.mkdir(parents=True, exist_ok=True)
                       continue
-                  if not item.isfile():
-                      raise SystemExit(f"Unsupported archive entry: {item.name}")
                   destination.parent.mkdir(parents=True, exist_ok=True)
-                  source = bundle.extractfile(item)
+                  source = archive.extractfile(item)
                   if source is None:
                       raise SystemExit(f"Could not read archive entry: {item.name}")
                   destination.write_bytes(source.read())
                   destination.chmod(0o755 if item.mode & 0o111 else 0o644)
 
-          archive.unlink()
-          print("NovaVPS source files extracted into novavps/.")
+          print(f"Imported {member_count} validated archive entries.")
+          print(f"Recovered one extra chunk character: {repaired}")
           PY
 
-      - name: Commit complete NovaVPS source
+      - name: Commit restored NovaVPS application source
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -68,5 +152,5 @@ jobs:
             echo "No source changes to commit."
             exit 0
           fi
-          git commit -m "Import complete NovaVPS v0.3.0-dev source"
+          git commit -m "Restore complete NovaVPS application source"
           git push
