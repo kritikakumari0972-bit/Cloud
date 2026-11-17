@@ -59,6 +59,8 @@ function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [password, setPassword] = useState('')
   const [setupRequired, setSetupRequired] = useState(false)
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false)
+  const [setupToken, setSetupToken] = useState('')
   const [authUsername, setAuthUsername] = useState('admin')
   const [authRole, setAuthRole] = useState<'owner' | 'user'>('owner')
   const [users, setUsers] = useState<PanelUser[]>([])
@@ -125,9 +127,10 @@ function App() {
         setAuthUsername(result.username || 'admin'); setAuthRole(role); setAuthenticated(true); void loadData(role === 'owner')
       })
       .catch(() => {
-        api<{ setupRequired: boolean; username?: string }>('/api/auth/setup-status')
+        api<{ setupRequired: boolean; username?: string; setupTokenRequired?: boolean }>('/api/auth/setup-status')
           .then(result => {
             setSetupRequired(result.setupRequired)
+            setSetupTokenRequired(Boolean(result.setupTokenRequired))
             if (result.username) { setAuthUsername(result.username); setSetupUsername(result.username); }
             setAuthenticated(false)
           })
@@ -170,13 +173,13 @@ function App() {
     try {
       await api('/api/auth/setup', {
         method: 'POST',
-        body: JSON.stringify({ username: setupUsername, password: setupPassword, confirmPassword: setupConfirmPassword }),
+        body: JSON.stringify({ username: setupUsername, password: setupPassword, confirmPassword: setupConfirmPassword, setupToken }),
       })
       setAuthUsername(setupUsername.trim())
       setAuthRole('owner')
       setSetupRequired(false)
       setPassword(setupPassword)
-      setSetupPassword(''); setSetupConfirmPassword('')
+      setSetupPassword(''); setSetupConfirmPassword(''); setSetupToken('')
       await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: setupUsername.trim(), password: setupPassword }) })
       setAuthenticated(true); setPassword(''); await loadData(true)
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not create administrator account') }
@@ -322,12 +325,13 @@ function App() {
         {setupRequired ? <form onSubmit={handleSetup} className="login-form">
           <label>Administrator username</label>
           <div className="input-icon"><LockKeyhole size={17} /><input autoFocus type="text" value={setupUsername} onChange={e => setSetupUsername(e.target.value)} minLength={3} maxLength={32} autoComplete="username" placeholder="Choose a username" required /></div>
+          {setupTokenRequired && <><label>One-time setup token</label><div className="input-icon"><KeyRound size={17} /><input type="password" value={setupToken} onChange={e => setSetupToken(e.target.value)} autoComplete="off" placeholder="Run sudo novavps setup-token on the host" required /></div></>}
           <label>Choose password</label>
           <div className="input-icon"><LockKeyhole size={17} /><input type="password" value={setupPassword} onChange={e => setSetupPassword(e.target.value)} minLength={12} maxLength={72} autoComplete="new-password" placeholder="At least 12 characters" required /></div>
           <label>Confirm password</label>
           <div className="input-icon"><LockKeyhole size={17} /><input type="password" value={setupConfirmPassword} onChange={e => setSetupConfirmPassword(e.target.value)} minLength={12} maxLength={72} autoComplete="new-password" placeholder="Enter the password again" required /></div>
           {error && <div className="inline-error">{error}</div>}
-          <button className="primary-button full-button" disabled={busy || !setupUsername.trim() || setupPassword.length < 12 || setupPassword !== setupConfirmPassword}>{busy ? 'Creating account…' : 'Create account'} <ChevronRight size={17} /></button>
+          <button className="primary-button full-button" disabled={busy || !setupUsername.trim() || (setupTokenRequired && !setupToken.trim()) || setupPassword.length < 12 || setupPassword !== setupConfirmPassword}>{busy ? 'Creating account…' : 'Create account'} <ChevronRight size={17} /></button>
         </form> : <form onSubmit={handleLogin} className="login-form">
           <label>Username</label>
           <div className="input-icon"><LockKeyhole size={17} /><input autoFocus type="text" value={authUsername} onChange={e => setAuthUsername(e.target.value)} autoComplete="username" placeholder="Enter your username" required /></div>
