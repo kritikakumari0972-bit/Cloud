@@ -23,7 +23,7 @@ Open the local panel at `http://127.0.0.1:8080`. On a remote host, use an SSH tu
 ssh -L 8080:127.0.0.1:8080 USER@YOUR_SERVER
 ```
 
-Then open `http://127.0.0.1:8080` on your own device. The generated first-start administrator password is printed in the installer output; save it securely.
+Then open `http://127.0.0.1:8080` on your own device. On first launch, open the panel and create the administrator username and password yourself. The account-creation screen is available only through localhost. For a remote Ubuntu/Debian machine, create the SSH tunnel shown above and open the local URL in your browser. The first account is the single owner account for that installation; separate user accounts and roles are not implemented yet.
 
 ### Optional public HTTPS
 
