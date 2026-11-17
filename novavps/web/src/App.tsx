@@ -177,7 +177,7 @@ function App() {
         truncated: result.truncated, durationMs: result.durationMs, ranAt: new Date().toISOString(),
       }, ...current].slice(0, 10))
       setCommandText('')
-      setNotice(result.timedOut ? 'Command stopped after the 20-second limit.' : result.exitCode === 0 ? 'Command completed successfully.' : 'Command exited with code ' + result.exitCode + '.')
+      setNotice(result.timedOut ? '20-second limit reached; the SSH session was closed. Remote process termination depends on the SSH server.' : result.exitCode === 0 ? 'Command completed successfully.' : 'Command exited with code ' + result.exitCode + '.')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Command execution failed')
     } finally { setCommandBusy(false) }
