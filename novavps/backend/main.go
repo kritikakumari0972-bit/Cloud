@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -184,6 +185,7 @@ func (a *App) routes() http.Handler {
 	mux.Handle("POST /api/servers/connect", a.auth(http.HandlerFunc(a.connectServer)))
 	mux.Handle("DELETE /api/servers/", a.auth(http.HandlerFunc(a.deleteServer)))
 	mux.Handle("GET /api/servers/", a.auth(http.HandlerFunc(a.serverAction)))
+	mux.Handle("POST /api/servers/{id}/command", a.auth(http.HandlerFunc(a.runSingleLineCommand)))
 	mux.Handle("GET /api/network/overview", a.auth(http.HandlerFunc(a.networkOverview)))
 	mux.Handle("GET /api/network/pools", a.auth(http.HandlerFunc(a.listIPPools)))
 	mux.Handle("POST /api/network/pools", a.auth(http.HandlerFunc(a.createIPPool)))
@@ -510,6 +512,145 @@ func (a *App) serverAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonOut(w, http.StatusOK, map[string]any{"serverId": server.ID, "metrics": metrics, "checkedAt": time.Now().UTC()})
+}
+
+type boundedOutput struct {
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *boundedOutput) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := b.limit - b.buffer.Len()
+	if remaining > 0 {
+		if len(data) > remaining {
+			_, _ = b.buffer.Write(data[:remaining])
+			b.truncated = true
+		} else {
+			_, _ = b.buffer.Write(data)
+		}
+	} else if len(data) > 0 {
+		b.truncated = true
+	}
+	// Report the complete write so the SSH stream is drained even after the
+	// display buffer reaches its cap.
+	return len(data), nil
+}
+
+func (b *boundedOutput) snapshot() (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String(), b.truncated
+}
+
+func validateSingleLineCommand(command string) (string, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", errors.New("command_required")
+	}
+	if len(command) > 2048 {
+		return "", errors.New("command_too_long")
+	}
+	if strings.ContainsAny(command, "\r\n\x00") {
+		return "", errors.New("single_line_command_required")
+	}
+	return command, nil
+}
+
+func (a *App) runSingleLineCommand(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		jsonOut(w, http.StatusForbidden, map[string]string{"error": "cross_origin_request"})
+		return
+	}
+	var body struct {
+		Command string `json:"command"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
+		return
+	}
+	command, err := validateSingleLineCommand(body.Command)
+	if err != nil {
+		jsonOut(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	serverID := r.PathValue("id")
+	a.mu.RLock()
+	server, ok := a.servers[serverID]
+	a.mu.RUnlock()
+	if !ok {
+		jsonOut(w, http.StatusNotFound, map[string]string{"error": "server_not_found"})
+		return
+	}
+
+	plain, err := a.decrypt(server.Encrypted)
+	if err != nil {
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "credential_decryption_failed"})
+		return
+	}
+	var secret credentials
+	if err := json.Unmarshal(plain, &secret); err != nil {
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "credential_record_invalid"})
+		return
+	}
+	client, err := openSSH(server.Host, server.Port, server.Username, secret, server.Fingerprint)
+	if err != nil {
+		jsonOut(w, http.StatusBadGateway, map[string]string{"error": "ssh_connection_failed", "message": "Could not reconnect to this server."})
+		return
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		jsonOut(w, http.StatusBadGateway, map[string]string{"error": "ssh_session_failed"})
+		return
+	}
+	defer session.Close()
+
+	output := &boundedOutput{limit: 48 * 1024}
+	session.Stdout = output
+	session.Stderr = output
+	started := time.Now()
+	if err := session.Start(command); err != nil {
+		jsonOut(w, http.StatusBadGateway, map[string]string{"error": "command_start_failed", "message": "The SSH server could not start this command."})
+		return
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- session.Wait() }()
+
+	timer := time.NewTimer(20 * time.Second)
+	defer timer.Stop()
+	select {
+	case waitErr := <-finished:
+		elapsed := time.Since(started).Milliseconds()
+		text, truncated := output.snapshot()
+		exitCode := 0
+		ok := waitErr == nil
+		if waitErr != nil {
+			var exitErr *ssh.ExitError
+			if errors.As(waitErr, &exitErr) {
+				exitCode = exitErr.ExitStatus()
+			} else {
+				exitCode = -1
+			}
+		}
+		jsonOut(w, http.StatusOK, map[string]any{
+			"ok": ok, "command": command, "output": text, "exitCode": exitCode,
+			"truncated": truncated, "timedOut": false, "durationMs": elapsed,
+		})
+	case <-timer.C:
+		_ = session.Close()
+		_ = client.Close()
+		text, truncated := output.snapshot()
+		jsonOut(w, http.StatusOK, map[string]any{
+			"ok": false, "command": command, "output": text, "exitCode": -1,
+			"truncated": truncated, "timedOut": true, "durationMs": time.Since(started).Milliseconds(),
+		})
+	}
 }
 
 func (a *App) networkOverview(w http.ResponseWriter, r *http.Request) {
