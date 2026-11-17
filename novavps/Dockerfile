@@ -7,8 +7,6 @@ RUN npm run build
 
 FROM golang:1.27-alpine AS api-build
 WORKDIR /src/backend
-COPY backend/go.mod ./go.mod
-RUN go mod tidy
 COPY backend/ ./
 RUN go mod tidy && go mod verify
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/novavps .
