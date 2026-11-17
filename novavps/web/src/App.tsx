@@ -92,7 +92,7 @@ function App() {
         api<{ allocations: Allocation[] }>('/api/network/allocations'),
       ])
       setServers(serverData.servers || [])
-      setCommandServerId(current => current || serverData.servers?.[0]?.id || '')
+      setCommandServerId(current => serverData.servers?.some(server => server.id === current) ? current : serverData.servers?.[0]?.id || '')
       setPools(poolData.pools || [])
       setAllocations(allocationData.allocations || [])
     } catch (e) {
@@ -164,7 +164,7 @@ function App() {
     event.preventDefault()
     const command = commandText.trim()
     if (!command || !commandServerId) return
-    if (/[\\r\\n\\u0000]/.test(command)) { setError('Enter one command on a single line.'); return }
+    if (/[\r\n\u0000]/.test(command)) { setError('Enter one command on a single line.'); return }
     setCommandBusy(true); setError(''); setNotice('')
     try {
       const result = await api<{ ok: boolean; output: string; exitCode: number; timedOut: boolean; truncated: boolean; durationMs: number }>('/api/servers/' + encodeURIComponent(commandServerId) + '/command', {
@@ -330,7 +330,7 @@ function App() {
                 {!commandRuns.length ? <div className="empty-inline">No commands have been run in this session.</div> : <div className="command-history">{commandRuns.map(run => <article className="command-result" key={run.id}>
                   <div className="command-result-head"><span className={run.timedOut || run.exitCode !== 0 ? 'command-failed' : 'command-ok'}>{run.timedOut ? 'TIMEOUT' : 'EXIT ' + run.exitCode}</span><small>{run.serverName} · {run.durationMs} ms · {timeAgo(run.ranAt)}</small></div>
                   <code className="command-echo">$ {run.command}</code>
-                  <pre>{run.output}{run.truncated ? '\\n… output truncated at 48 KiB' : ''}</pre>
+                  <pre>{run.output}{run.truncated ? '\n… output truncated at 48 KiB' : ''}</pre>
                 </article>)}</div>}
               </section>
             </>}
