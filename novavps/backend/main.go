@@ -510,6 +510,9 @@ func (a *App) rateLimited(r *http.Request) bool {
 	now := time.Now()
 	a.loginMu.Lock()
 	defer a.loginMu.Unlock()
+	if a.loginHits == nil {
+		a.loginHits = map[string][]time.Time{}
+	}
 	hits := a.loginHits[key]
 	kept := hits[:0]
 	for _, hit := range hits {
@@ -524,6 +527,9 @@ func (a *App) rateLimited(r *http.Request) bool {
 func (a *App) loginFailed(w http.ResponseWriter, r *http.Request) {
 	key := clientIP(r)
 	a.loginMu.Lock()
+	if a.loginHits == nil {
+		a.loginHits = map[string][]time.Time{}
+	}
 	a.loginHits[key] = append(a.loginHits[key], time.Now())
 	a.loginMu.Unlock()
 	jsonOut(w, http.StatusUnauthorized, map[string]string{"error": "invalid_credentials"})
