@@ -56,6 +56,22 @@ Set the Netlify site's **Base directory** to `novavps`. The included `netlify.to
 
 Do not put API credentials or SSH keys in `netlify.toml` or frontend build variables. Only the public API origin belongs in `NOVAVPS_API_ORIGIN`. See https://docs.netlify.com/build/edge-functions/environment-variables/.
 
+## Local installation: create your first account
+
+On a clean local installation, leave `NOVAVPS_ADMIN_PASSWORD` unset. Start NovaVPS and open it from the same machine at `http://127.0.0.1:8080`. The first-run screen asks the owner to create a username and password. Usernames may contain 3–32 letters, numbers, dots, dashes, or underscores. Passwords must contain at least 12 characters and no more than 72 UTF-8 bytes.
+
+The username is stored in `admin_username`; the password is stored only as a bcrypt hash in `admin_password.hash` inside the NovaVPS data directory. The setup endpoint accepts the first account only and only from a loopback connection, preventing an internet visitor from claiming a fresh installation. Keep the data directory private and back it up securely.
+
+For a NovaVPS instance installed on a remote machine, create an SSH port-forward from your own computer before opening the setup page:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 your-user@your-machine
+```
+
+Then visit `http://127.0.0.1:8080` in your local browser. The browser-to-NovaVPS setup request reaches the service through the loopback tunnel. Once the account has been created, future logins use the username and password chosen during setup.
+
+For hosted deployments that set `NOVAVPS_ADMIN_PASSWORD` (including the supplied Render Blueprint), the setup screen is disabled and the username remains `admin` unless explicitly changed in a later account-management feature.
+
 ## 4. Shared configuration and security
 
 - Use an HTTPS Go API origin. The Vercel and Netlify proxies reject non-HTTPS origins.
