@@ -317,6 +317,10 @@ func (a *App) setupAdmin(w http.ResponseWriter, r *http.Request) {
 		ConfirmPassword string `json:"confirmPassword"`
 		SetupToken      string `json:"setupToken"`
 	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
+		return
+	}
 	if a.setupToken != "" {
 		if subtle.ConstantTimeCompare([]byte(body.SetupToken), []byte(a.setupToken)) != 1 {
 			jsonOut(w, http.StatusForbidden, map[string]string{"error": "invalid_setup_token", "message": "Retrieve the one-time setup token on the NovaVPS host with: sudo novavps setup-token"})
@@ -324,10 +328,6 @@ func (a *App) setupAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if !isLoopbackRequest(r) {
 		jsonOut(w, http.StatusForbidden, map[string]string{"error": "setup_local_only", "message": "Create the first account from localhost or configure the one-time installer setup token."})
-		return
-	}
-	if err := decodeJSON(w, r, &body); err != nil {
-		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}
 	body.Username = strings.TrimSpace(body.Username)
