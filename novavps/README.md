@@ -32,7 +32,7 @@ For a remote first-run setup, use an SSH tunnel to the host's localhost port, th
 ssh -L 8080:127.0.0.1:8080 USER@YOUR_SERVER
 ```
 
-Create the owner username and password through the first-run panel page. After signing in, open **User accounts** in the sidebar to create or delete additional panel users. Each account receives its own username/password and can be assigned selected connected machines. Users sign in at the same panel URL and only see their assigned machines.
+Create the owner username and password through the first-run panel page. The installer generates a one-time setup token; retrieve it on the host with `sudo novavps setup-token` and enter it in the setup form. This avoids Docker loopback-address differences while preventing an unclaimed public setup page. After signing in, open **User accounts** in the sidebar to create or delete additional panel users. Each account receives its own username/password and can be assigned selected connected machines. Users sign in at the same panel URL and only see their assigned machines. Share the login URL and credentials through a secure channel.
 
 A user command runs over SSH as the SSH username saved for that machine. If the owner enrolled the machine using the `root` SSH account, the user's commands execute with that machine's root privileges. This is powerful access: only assign servers to people who are trusted and authorized to administer them. The current feature is a bounded single-command runner, not an interactive root shell.
 
