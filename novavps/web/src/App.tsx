@@ -13,12 +13,16 @@ type ServerRecord = {
 type Pool = { id: string; name: string; cidr: string; gateway?: string; family: string; createdAt: string }
 type Allocation = { id: string; poolId: string; address: string; targetType: string; targetId: string; createdAt: string }
 type Metrics = Record<string, string>
+type CommandRun = {
+  id: string; serverName: string; command: string; output: string
+  exitCode: number; timedOut: boolean; truncated: boolean; durationMs: number; ranAt: string
+}
 type ApiError = Error & { status?: number; data?: Record<string, unknown> }
 type ConnectValues = {
   name: string; host: string; port: number; username: string; authMethod: string
   password: string; privateKey: string; keyPassphrase: string
 }
-type Page = 'overview' | 'servers' | 'network'
+type Page = 'overview' | 'servers' | 'network' | 'terminal'
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
@@ -73,6 +77,10 @@ function App() {
   })
   const [poolValues, setPoolValues] = useState({ name: '', cidr: '', gateway: '', authorized: false })
   const [allocationValues, setAllocationValues] = useState({ poolId: '', targetType: 'server', targetId: '' })
+  const [commandServerId, setCommandServerId] = useState('')
+  const [commandText, setCommandText] = useState('')
+  const [commandBusy, setCommandBusy] = useState(false)
+  const [commandRuns, setCommandRuns] = useState<CommandRun[]>([])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -84,6 +92,7 @@ function App() {
         api<{ allocations: Allocation[] }>('/api/network/allocations'),
       ])
       setServers(serverData.servers || [])
+      setCommandServerId(current => current || serverData.servers?.[0]?.id || '')
       setPools(poolData.pools || [])
       setAllocations(allocationData.allocations || [])
     } catch (e) {
@@ -149,6 +158,29 @@ function App() {
         setFingerprintVerified(false)
       } else setError(err.message)
     } finally { setBusy(false) }
+  }
+
+  async function executeSingleLineCommand(event: FormEvent) {
+    event.preventDefault()
+    const command = commandText.trim()
+    if (!command || !commandServerId) return
+    if (/[\\r\\n\\u0000]/.test(command)) { setError('Enter one command on a single line.'); return }
+    setCommandBusy(true); setError(''); setNotice('')
+    try {
+      const result = await api<{ ok: boolean; output: string; exitCode: number; timedOut: boolean; truncated: boolean; durationMs: number }>('/api/servers/' + encodeURIComponent(commandServerId) + '/command', {
+        method: 'POST', body: JSON.stringify({ command }),
+      })
+      const server = servers.find(item => item.id === commandServerId)
+      setCommandRuns(current => [{
+        id: String(Date.now()) + '-' + current.length, serverName: server?.name || 'Server', command,
+        output: result.output || '(no output)', exitCode: result.exitCode, timedOut: result.timedOut,
+        truncated: result.truncated, durationMs: result.durationMs, ranAt: new Date().toISOString(),
+      }, ...current].slice(0, 10))
+      setCommandText('')
+      setNotice(result.timedOut ? 'Command stopped after the 20-second limit.' : result.exitCode === 0 ? 'Command completed successfully.' : 'Command exited with code ' + result.exitCode + '.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Command execution failed')
+    } finally { setCommandBusy(false) }
   }
 
   async function addPool(event: FormEvent) {
@@ -230,7 +262,7 @@ function App() {
         <button className={`nav-item ${page === 'servers' ? 'active' : ''}`} onClick={() => { setPage('servers'); setMobileMenu(false) }}><Server size={18} /> Servers <span className="nav-count">{servers.length}</span></button>
         <button className={`nav-item ${page === 'network' ? 'active' : ''}`} onClick={() => { setPage('network'); setMobileMenu(false) }}><Network size={18} /> Networking</button>
         <div className="nav-label nav-label-lower">TOOLS</div>
-        <div className="nav-disabled"><TerminalSquare size={18} /> Browser terminal <span>SOON</span></div>
+        <button className={page === 'terminal' ? 'nav-item active' : 'nav-item'} onClick={() => { setPage('terminal'); setMobileMenu(false) }}><TerminalSquare size={18} /> Command runner</button>
         <div className="nav-disabled"><HardDrive size={18} /> File manager <span>SOON</span></div>
         <div className="sidebar-bottom">
           <div className="security-note"><ShieldCheck size={17} /><div><b>Encrypted credentials</b><span>SSH secrets are encrypted at rest.</span></div></div>
@@ -242,7 +274,7 @@ function App() {
       {mobileMenu && <button className="mobile-scrim" onClick={() => setMobileMenu(false)} aria-label="Close navigation" />}
       <main className="main-area">
         <header className="topbar">
-          <div className="topbar-left"><button className="icon-button menu-toggle" onClick={() => setMobileMenu(true)} aria-label="Open menu"><Menu size={20} /></button><div className="breadcrumb">NovaVPS <ChevronRight size={14} /> <b>{page === 'overview' ? 'Overview' : page === 'servers' ? 'Servers' : 'Networking'}</b></div></div>
+          <div className="topbar-left"><button className="icon-button menu-toggle" onClick={() => setMobileMenu(true)} aria-label="Open menu"><Menu size={20} /></button><div className="breadcrumb">NovaVPS <ChevronRight size={14} /> <b>{page === 'overview' ? 'Overview' : page === 'servers' ? 'Servers' : page === 'network' ? 'Networking' : 'Command runner'}</b></div></div>
           <div className="topbar-actions"><div className="connection-status"><span className="online-dot" /> API connected</div><button className="icon-button" title="Refresh data" onClick={() => void loadData()}><RefreshCw size={17} className={loading ? 'spin' : ''} /></button><div className="avatar-small">A</div></div>
         </header>
 
@@ -279,6 +311,29 @@ function App() {
                 <div className="server-list">{servers.map(server => <ServerRow key={server.id} server={server} onMetrics={() => void refreshMetrics(server.id)} metrics={metrics[server.id]} onRemove={() => void removeServer(server.id)} />)}</div>}
             </div>
             <p className="page-footnote"><ShieldCheck size={14} /> SSH host keys are checked on every connection. Removing a server only deletes its NovaVPS record; it does not modify the remote machine.</p>
+          </>}
+
+          {page === 'terminal' && <>
+            <div className="page-heading"><div><div className="eyebrow">REMOTE SERVER TOOLS</div><h1>Single-line command</h1><p>Run one SSH command on a connected server and view its output.</p></div></div>
+            {servers.length === 0 ? <div className="panel-card"><EmptyState icon={<TerminalSquare size={23} />} title="Connect a server first" description="The command runner uses the SSH credentials saved for a server in your inventory." action={<button className="primary-button" onClick={() => setConnectOpen(true)}><Plus size={15} /> Connect server</button>} /></div> : <>
+              <section className="panel-card command-panel">
+                <div className="card-heading"><div><h2>Command input</h2><p>Runs as the SSH user configured for the selected server.</p></div><span className="count-pill">SSH EXEC</span></div>
+                <form className="command-form" onSubmit={e => void executeSingleLineCommand(e)}>
+                  <label>Target server<select value={commandServerId} onChange={e => setCommandServerId(e.target.value)} required>{servers.map(server => <option key={server.id} value={server.id}>{server.name} · {server.username}@{server.host}</option>)}</select></label>
+                  <label>Command<input type="text" value={commandText} onChange={e => setCommandText(e.target.value)} placeholder="Enter a single-line command…" maxLength={2048} autoComplete="off" spellCheck={false} required /></label>
+                  <div className="command-submit-row"><span>One line · 20s timeout · output capped at 48 KiB</span><button className="primary-button" disabled={commandBusy || !commandText.trim()}><TerminalSquare size={16} />{commandBusy ? 'Running…' : 'Run command'}</button></div>
+                </form>
+                <div className="modal-security command-security"><ShieldCheck size={16} /><span>Only run commands on machines you own or are authorized to administer. Commands execute remotely as the saved SSH user. They are not saved by NovaVPS.</span></div>
+              </section>
+              <section className="panel-card command-history-panel">
+                <div className="card-heading"><div><h2>Recent output</h2><p>Latest 10 commands from this browser session.</p></div><button className="text-button" onClick={() => setCommandRuns([])} disabled={!commandRuns.length}>Clear history</button></div>
+                {!commandRuns.length ? <div className="empty-inline">No commands have been run in this session.</div> : <div className="command-history">{commandRuns.map(run => <article className="command-result" key={run.id}>
+                  <div className="command-result-head"><span className={run.timedOut || run.exitCode !== 0 ? 'command-failed' : 'command-ok'}>{run.timedOut ? 'TIMEOUT' : 'EXIT ' + run.exitCode}</span><small>{run.serverName} · {run.durationMs} ms · {timeAgo(run.ranAt)}</small></div>
+                  <code className="command-echo">$ {run.command}</code>
+                  <pre>{run.output}{run.truncated ? '\\n… output truncated at 48 KiB' : ''}</pre>
+                </article>)}</div>}
+              </section>
+            </>}
           </>}
 
           {page === 'network' && <>
