@@ -57,6 +57,11 @@ function timeAgo(value: string) {
 function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null)
   const [password, setPassword] = useState('')
+  const [setupRequired, setSetupRequired] = useState(false)
+  const [authUsername, setAuthUsername] = useState('admin')
+  const [setupUsername, setSetupUsername] = useState('admin')
+  const [setupPassword, setSetupPassword] = useState('')
+  const [setupConfirmPassword, setSetupConfirmPassword] = useState('')
   const [page, setPage] = useState<Page>('overview')
   const [servers, setServers] = useState<ServerRecord[]>([])
   const [pools, setPools] = useState<Pool[]>([])
@@ -101,9 +106,17 @@ function App() {
   }, [])
 
   useEffect(() => {
-    api<{ authenticated: boolean }>('/api/auth/me')
-      .then(() => { setAuthenticated(true); void loadData() })
-      .catch((e: ApiError) => setAuthenticated(e.status === 401 ? false : false))
+    api<{ authenticated: boolean; username: string }>('/api/auth/me')
+      .then(result => { setAuthUsername(result.username || 'admin'); setAuthenticated(true); void loadData() })
+      .catch(() => {
+        api<{ setupRequired: boolean; username?: string }>('/api/auth/setup-status')
+          .then(result => {
+            setSetupRequired(result.setupRequired)
+            if (result.username) { setAuthUsername(result.username); setSetupUsername(result.username); }
+            setAuthenticated(false)
+          })
+          .catch(() => setAuthenticated(false))
+      })
   }, [loadData])
 
   const refreshMetrics = useCallback(async (serverId: string) => {
@@ -128,9 +141,27 @@ function App() {
     event.preventDefault()
     setBusy(true); setError('')
     try {
-      await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password }) })
+      await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: authUsername, password }) })
       setAuthenticated(true); setPassword(''); await loadData()
     } catch (e) { setError(e instanceof Error ? e.message : 'Sign-in failed') }
+    finally { setBusy(false) }
+  }
+
+  async function handleSetup(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true); setError('')
+    try {
+      await api('/api/auth/setup', {
+        method: 'POST',
+        body: JSON.stringify({ username: setupUsername, password: setupPassword, confirmPassword: setupConfirmPassword }),
+      })
+      setAuthUsername(setupUsername.trim())
+      setSetupRequired(false)
+      setPassword(setupPassword)
+      setSetupPassword(''); setSetupConfirmPassword('')
+      await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: setupUsername.trim(), password: setupPassword }) })
+      setAuthenticated(true); setPassword(''); await loadData()
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not create administrator account') }
     finally { setBusy(false) }
   }
 
@@ -236,16 +267,27 @@ function App() {
       <div className="login-glow login-glow-a" /><div className="login-glow login-glow-b" />
       <section className="login-card">
         <div className="brand-row"><div className="brand-mark">N</div><div><b>NovaVPS</b><span>UNIVERSAL SERVER CONTROL</span></div></div>
-        <div className="login-kicker"><ShieldCheck size={15} /> PRIVATE ADMIN ACCESS</div>
-        <h1>Your servers.<br /><em>One control plane.</em></h1>
-        <p className="muted">Sign in to manage the machines you own or are authorized to administer.</p>
-        <form onSubmit={handleLogin} className="login-form">
-          <label>Administrator password</label>
-          <div className="input-icon"><LockKeyhole size={17} /><input autoFocus type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your admin password" required /></div>
+        <div className="login-kicker"><ShieldCheck size={15} /> {setupRequired ? 'FIRST-RUN LOCAL SETUP' : 'PRIVATE ADMIN ACCESS'}</div>
+        <h1>{setupRequired ? <>Create your<br /><em>admin account.</em></> : <>Your servers.<br /><em>One control plane.</em></>}</h1>
+        <p className="muted">{setupRequired ? 'Choose a username and password for this NovaVPS installation. Credentials are stored locally on this machine.' : 'Sign in to manage the machines you own or are authorized to administer.'}</p>
+        {setupRequired ? <form onSubmit={handleSetup} className="login-form">
+          <label>Administrator username</label>
+          <div className="input-icon"><LockKeyhole size={17} /><input autoFocus type="text" value={setupUsername} onChange={e => setSetupUsername(e.target.value)} minLength={3} maxLength={32} autoComplete="username" placeholder="Choose a username" required /></div>
+          <label>Choose password</label>
+          <div className="input-icon"><LockKeyhole size={17} /><input type="password" value={setupPassword} onChange={e => setSetupPassword(e.target.value)} minLength={12} maxLength={72} autoComplete="new-password" placeholder="At least 12 characters" required /></div>
+          <label>Confirm password</label>
+          <div className="input-icon"><LockKeyhole size={17} /><input type="password" value={setupConfirmPassword} onChange={e => setSetupConfirmPassword(e.target.value)} minLength={12} maxLength={72} autoComplete="new-password" placeholder="Enter the password again" required /></div>
           {error && <div className="inline-error">{error}</div>}
-          <button className="primary-button full-button" disabled={busy || !password}>{busy ? 'Signing in…' : 'Sign in'} <ChevronRight size={17} /></button>
-        </form>
-        <div className="login-foot"><LockKeyhole size={14} /> Your credentials stay on your NovaVPS backend.</div>
+          <button className="primary-button full-button" disabled={busy || !setupUsername.trim() || setupPassword.length < 12 || setupPassword !== setupConfirmPassword}>{busy ? 'Creating account…' : 'Create account'} <ChevronRight size={17} /></button>
+        </form> : <form onSubmit={handleLogin} className="login-form">
+          <label>Username</label>
+          <div className="input-icon"><LockKeyhole size={17} /><input autoFocus type="text" value={authUsername} onChange={e => setAuthUsername(e.target.value)} autoComplete="username" placeholder="Enter your username" required /></div>
+          <label>Password</label>
+          <div className="input-icon"><LockKeyhole size={17} /><input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" placeholder="Enter your password" required /></div>
+          {error && <div className="inline-error">{error}</div>}
+          <button className="primary-button full-button" disabled={busy || !password || !authUsername.trim()}>{busy ? 'Signing in…' : 'Sign in'} <ChevronRight size={17} /></button>
+        </form>}
+        <div className="login-foot"><LockKeyhole size={14} /> Your credentials stay on your NovaVPS machine. First setup is available from localhost only.</div>
       </section>
       <div className="login-aside"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="aside-code">SSH <span>•</span> KVM <span>•</span> IPv4 <span>•</span> IPv6</div><div className="aside-title">One place to<br /><strong>run your fleet.</strong></div><div className="aside-caption">Connect third-party VPS, Linux servers and authorized hypervisors.</div></div>
     </main>
@@ -256,7 +298,7 @@ function App() {
       <aside className={`sidebar ${mobileMenu ? 'sidebar-open' : ''}`}>
         <div className="brand-row sidebar-brand"><div className="brand-mark">N</div><div><b>NovaVPS</b><span>CONTROL CENTER</span></div><button className="icon-button mobile-close" onClick={() => setMobileMenu(false)} aria-label="Close menu"><X size={18} /></button></div>
         <div className="workspace-label">WORKSPACE</div>
-        <div className="workspace-card"><div className="workspace-avatar">A</div><div><b>Administrator</b><span>Personal workspace</span></div><span className="online-dot" /></div>
+        <div className="workspace-card"><div className="workspace-avatar">{authUsername.slice(0, 1).toUpperCase()}</div><div><b>{authUsername}</b><span>Personal workspace</span></div><span className="online-dot" /></div>
         <div className="nav-label">MANAGE</div>
         <button className={`nav-item ${page === 'overview' ? 'active' : ''}`} onClick={() => { setPage('overview'); setMobileMenu(false) }}><LayoutDashboard size={18} /> Overview</button>
         <button className={`nav-item ${page === 'servers' ? 'active' : ''}`} onClick={() => { setPage('servers'); setMobileMenu(false) }}><Server size={18} /> Servers <span className="nav-count">{servers.length}</span></button>
