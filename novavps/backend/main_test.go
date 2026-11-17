@@ -243,3 +243,37 @@ func TestCreateUserRejectsUnknownServerAssignment(t *testing.T) {
 		t.Fatal("invalid user assignment must not create an account")
 	}
 }
+
+
+func TestSetupAdminAcceptsInstallerTokenFromRemoteBrowser(t *testing.T) {
+	dataDir := t.TempDir()
+	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	a := &App{cfg: Config{DataDir: dataDir}, setupToken: token, sessions: map[string]sessionRecord{}}
+	payload := `{"username":"owner2","password":"another-strong-owner-password","confirmPassword":"another-strong-owner-password","setupToken":"` + token + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(payload))
+	request.RemoteAddr = "172.19.0.1:4567" // Typical Docker bridge source address.
+	response := httptest.NewRecorder()
+	a.setupAdmin(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("token-authorized setup status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if a.adminUsername != "owner2" || len(a.adminHash) == 0 {
+		t.Fatal("installer token did not create the owner account")
+	}
+}
+
+func TestSetupAdminRejectsIncorrectInstallerToken(t *testing.T) {
+	dataDir := t.TempDir()
+	a := &App{cfg: Config{DataDir: dataDir}, setupToken: "correct-installer-token"}
+	payload := `{"username":"owner3","password":"another-strong-owner-password","confirmPassword":"another-strong-owner-password","setupToken":"wrong-token"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(payload))
+	request.RemoteAddr = "172.19.0.1:4567"
+	response := httptest.NewRecorder()
+	a.setupAdmin(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("incorrect setup token status = %d, want 403", response.Code)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "admin_password.hash")); !os.IsNotExist(err) {
+		t.Fatal("incorrect installer token must not create an owner account")
+	}
+}
