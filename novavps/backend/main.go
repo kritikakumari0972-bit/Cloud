@@ -106,7 +106,8 @@ type App struct {
 	servers       map[string]Server
 	ipPools       map[string]IPPool
 	ipAllocations map[string]IPAllocation
-	sessions      map[string]time.Time
+	sessions      map[string]sessionRecord
+	users         map[string]PanelUser
 	loginMu       sync.Mutex
 	loginHits     map[string][]time.Time
 	adminHash     []byte
@@ -154,12 +155,16 @@ func main() {
 		servers:       map[string]Server{},
 		ipPools:       map[string]IPPool{},
 		ipAllocations: map[string]IPAllocation{},
-		sessions:      map[string]time.Time{},
+		sessions:      map[string]sessionRecord{},
+		users:         map[string]PanelUser{},
 		loginHits:     map[string][]time.Time{},
 		adminHash:     adminHash,
 		adminUsername: adminUsername,
 	}
 	if err := app.loadServers(); err != nil {
+		log.Fatal(err)
+	}
+	if err := app.loadPanelUsers(); err != nil {
 		log.Fatal(err)
 	}
 	if err := app.loadNetworkStore(); err != nil {
@@ -191,23 +196,25 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("POST /api/auth/logout", a.logout)
 	mux.Handle("GET /api/auth/me", a.auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		a.mu.RLock()
-		username := a.adminUsername
-		a.mu.RUnlock()
-		jsonOut(w, http.StatusOK, map[string]any{"authenticated": true, "username": username})
+		session := sessionForRequest(r)
+		jsonOut(w, http.StatusOK, map[string]any{"authenticated": true, "username": session.Username, "role": session.Role})
 	})))
+	mux.Handle("GET /api/users", a.ownerAuth(http.HandlerFunc(a.listUsers)))
+	mux.Handle("POST /api/users", a.ownerAuth(http.HandlerFunc(a.createUser)))
+	mux.Handle("PATCH /api/users/{id}", a.ownerAuth(http.HandlerFunc(a.updateUser)))
+	mux.Handle("DELETE /api/users/{id}", a.ownerAuth(http.HandlerFunc(a.deleteUser)))
 	mux.Handle("GET /api/servers", a.auth(http.HandlerFunc(a.listServers)))
-	mux.Handle("POST /api/servers/connect", a.auth(http.HandlerFunc(a.connectServer)))
-	mux.Handle("DELETE /api/servers/", a.auth(http.HandlerFunc(a.deleteServer)))
+	mux.Handle("POST /api/servers/connect", a.ownerAuth(http.HandlerFunc(a.connectServer)))
+	mux.Handle("DELETE /api/servers/", a.ownerAuth(http.HandlerFunc(a.deleteServer)))
 	mux.Handle("GET /api/servers/", a.auth(http.HandlerFunc(a.serverAction)))
 	mux.Handle("POST /api/servers/{id}/command", a.auth(http.HandlerFunc(a.runSingleLineCommand)))
-	mux.Handle("GET /api/network/overview", a.auth(http.HandlerFunc(a.networkOverview)))
-	mux.Handle("GET /api/network/pools", a.auth(http.HandlerFunc(a.listIPPools)))
-	mux.Handle("POST /api/network/pools", a.auth(http.HandlerFunc(a.createIPPool)))
-	mux.Handle("DELETE /api/network/pools/", a.auth(http.HandlerFunc(a.deleteIPPool)))
-	mux.Handle("GET /api/network/allocations", a.auth(http.HandlerFunc(a.listIPAllocations)))
-	mux.Handle("POST /api/network/allocations", a.auth(http.HandlerFunc(a.createIPAllocation)))
-	mux.Handle("DELETE /api/network/allocations/", a.auth(http.HandlerFunc(a.releaseIPAllocation)))
+	mux.Handle("GET /api/network/overview", a.ownerAuth(http.HandlerFunc(a.networkOverview)))
+	mux.Handle("GET /api/network/pools", a.ownerAuth(http.HandlerFunc(a.listIPPools)))
+	mux.Handle("POST /api/network/pools", a.ownerAuth(http.HandlerFunc(a.createIPPool)))
+	mux.Handle("DELETE /api/network/pools/", a.ownerAuth(http.HandlerFunc(a.deleteIPPool)))
+	mux.Handle("GET /api/network/allocations", a.ownerAuth(http.HandlerFunc(a.listIPAllocations)))
+	mux.Handle("POST /api/network/allocations", a.ownerAuth(http.HandlerFunc(a.createIPAllocation)))
+	mux.Handle("DELETE /api/network/allocations/", a.ownerAuth(http.HandlerFunc(a.releaseIPAllocation)))
 
 	webDir := env("NOVAVPS_WEB_DIR", "./web/dist")
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -263,9 +270,18 @@ func (a *App) auth(next http.Handler) http.Handler {
 			return
 		}
 		a.mu.RLock()
-		expiry, ok := a.sessions[c.Value]
+		session, ok := a.sessions[c.Value]
+		valid := ok && time.Now().Before(session.ExpiresAt)
+		if valid && session.Role == "owner" {
+			valid = len(a.adminHash) > 0 && strings.EqualFold(session.Username, a.adminUsername)
+		} else if valid && session.Role == "user" {
+			user, exists := a.users[session.UserID]
+			valid = exists && strings.EqualFold(user.Username, session.Username)
+		} else if valid {
+			valid = false
+		}
 		a.mu.RUnlock()
-		if !ok || time.Now().After(expiry) {
+		if !valid {
 			a.mu.Lock()
 			delete(a.sessions, c.Value)
 			a.mu.Unlock()
@@ -273,7 +289,7 @@ func (a *App) auth(next http.Handler) http.Handler {
 			jsonOut(w, http.StatusUnauthorized, map[string]string{"error": "session_expired"})
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, requestWithSession(r, session))
 	})
 }
 
@@ -366,9 +382,9 @@ func (a *App) setupAdmin(w http.ResponseWriter, r *http.Request) {
 	a.adminUsername = body.Username
 	a.adminHash = hash
 	if a.sessions == nil {
-		a.sessions = map[string]time.Time{}
+		a.sessions = map[string]sessionRecord{}
 	}
-	a.sessions[token] = expiry
+	a.sessions[token] = sessionRecord{Username: body.Username, Role: "owner", ExpiresAt: expiry}
 	a.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookieName, Value: token, Path: "/", Expires: expiry,
@@ -423,11 +439,34 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}
+	body.Username = strings.TrimSpace(body.Username)
+	if body.Username == "" || a.rateLimited(r) {
+		a.loginFailed(w, r)
+		return
+	}
 	a.mu.RLock()
 	adminUsername := a.adminUsername
 	adminHash := append([]byte(nil), a.adminHash...)
+	users := make([]PanelUser, 0, len(a.users))
+	for _, user := range a.users {
+		user.PasswordHash = append([]byte(nil), user.PasswordHash...)
+		users = append(users, user)
+	}
 	a.mu.RUnlock()
-	if adminUsername == "" || body.Username != adminUsername || a.rateLimited(r) || bcrypt.CompareHashAndPassword(adminHash, []byte(body.Password)) != nil {
+
+	session := sessionRecord{}
+	if adminUsername != "" && strings.EqualFold(body.Username, adminUsername) && len(adminHash) > 0 &&
+		bcrypt.CompareHashAndPassword(adminHash, []byte(body.Password)) == nil {
+		session = sessionRecord{Username: adminUsername, Role: "owner"}
+	} else {
+		for _, user := range users {
+			if strings.EqualFold(body.Username, user.Username) && bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(body.Password)) == nil {
+				session = sessionRecord{Username: user.Username, Role: "user", UserID: user.ID}
+				break
+			}
+		}
+	}
+	if session.Role == "" {
 		a.loginFailed(w, r)
 		return
 	}
@@ -437,15 +476,19 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expiry := time.Now().Add(sessionLifetime)
+	session.ExpiresAt = expiry
 	a.mu.Lock()
-	a.sessions[token] = expiry
+	if a.sessions == nil {
+		a.sessions = map[string]sessionRecord{}
+	}
+	a.sessions[token] = session
 	a.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookieName, Value: token, Path: "/", Expires: expiry,
 		MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, Secure: a.cfg.CookieSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
-	jsonOut(w, http.StatusOK, map[string]any{"ok": true, "username": adminUsername})
+	jsonOut(w, http.StatusOK, map[string]any{"ok": true, "username": session.Username, "role": session.Role})
 }
 
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
@@ -487,9 +530,16 @@ func (a *App) loginFailed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) listServers(w http.ResponseWriter, r *http.Request) {
+	session := sessionForRequest(r)
 	a.mu.RLock()
 	out := make([]publicServer, 0, len(a.servers))
 	for _, s := range a.servers {
+		if session.Role == "user" {
+			user, ok := a.users[session.UserID]
+			if !ok || !containsString(user.ServerIDs, s.ID) {
+				continue
+			}
+		}
 		out = append(out, publicServer{ID: s.ID, Name: s.Name, Host: s.Host, Port: s.Port, Username: s.Username, AuthMethod: s.AuthMethod, Fingerprint: s.Fingerprint, AddedAt: s.AddedAt})
 	}
 	a.mu.RUnlock()
@@ -618,6 +668,10 @@ func (a *App) serverAction(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, http.StatusNotFound, map[string]string{"error": "endpoint_not_found"})
 		return
 	}
+	if !a.canAccessServer(sessionForRequest(r), parts[0]) {
+		jsonOut(w, http.StatusForbidden, map[string]string{"error": "server_access_denied"})
+		return
+	}
 	a.mu.RLock()
 	server, ok := a.servers[parts[0]]
 	a.mu.RUnlock()
@@ -727,6 +781,10 @@ func (a *App) runSingleLineCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serverID := r.PathValue("id")
+	if !a.canAccessServer(sessionForRequest(r), serverID) {
+		jsonOut(w, http.StatusForbidden, map[string]string{"error": "server_access_denied"})
+		return
+	}
 	a.mu.RLock()
 	server, ok := a.servers[serverID]
 	a.mu.RUnlock()
