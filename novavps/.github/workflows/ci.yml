@@ -1,0 +1,41 @@
+name: NovaVPS CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Download modules
+        working-directory: novavps/backend
+        run: go mod download
+      - name: Test backend
+        working-directory: novavps/backend
+        run: go test ./...
+      - name: Vet backend
+        working-directory: novavps/backend
+        run: go vet ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.13.1'
+      - name: Install dependencies
+        working-directory: novavps/web
+        run: npm install
+      - name: Build frontend
+        working-directory: novavps/web
+        run: npm run build
