@@ -47,8 +47,6 @@ async function readRequestBody(req) {
   return Buffer.concat(chunks);
 }
 
-module.exports.config = { api: { bodyParser: false } };
-
 module.exports = async function novavpsApiProxy(req, res) {
   try {
     const origin = safeApiOrigin();
@@ -109,3 +107,7 @@ module.exports = async function novavpsApiProxy(req, res) {
     }));
   }
 };
+
+
+// Keep the raw request stream available for the proxy instead of parsing JSON first.
+module.exports.config = { api: { bodyParser: false } };
