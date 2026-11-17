@@ -1069,6 +1069,31 @@ func loadOrCreateSecret(path string, size int) ([]byte, error) {
 }
 
 func loadOrCreateAdminCredentials(path string) (string, []byte, bool, error) {
+	// An explicitly configured deployment secret is authoritative. This also
+	// lets an operator rotate the admin password after the hash file exists.
+	// Never return or log the configured value.
+	if password := os.Getenv("NOVAVPS_ADMIN_PASSWORD"); password != "" {
+		if len(password) < 12 {
+			return "", nil, false, errors.New("NOVAVPS_ADMIN_PASSWORD must contain at least 12 characters")
+		}
+		if existing, err := os.ReadFile(path); err == nil {
+			if bcrypt.CompareHashAndPassword(existing, []byte(password)) == nil {
+				return "", existing, false, nil
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", nil, false, err
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return "", nil, false, err
+		}
+		if err := writeAdminPasswordHash(path, hash); err != nil {
+			return "", nil, false, err
+		}
+		return "", hash, false, nil
+	}
+
 	hash, err := os.ReadFile(path)
 	if err == nil {
 		return "", hash, false, nil
@@ -1076,35 +1101,42 @@ func loadOrCreateAdminCredentials(path string) (string, []byte, bool, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return "", nil, false, err
 	}
-	password := os.Getenv("NOVAVPS_ADMIN_PASSWORD")
-	if password == "" {
-		password, err = randomToken(24)
-		if err != nil {
-			return "", nil, false, err
-		}
-	}
-	if len(password) < 16 {
-		return "", nil, false, errors.New("NOVAVPS_ADMIN_PASSWORD must contain at least 16 characters")
+	password, err := randomToken(24)
+	if err != nil {
+		return "", nil, false, err
 	}
 	hash, err = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", nil, false, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return "", nil, false, err
-	}
-	if _, err = file.Write(hash); err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	if err := writeAdminPasswordHash(path, hash); err != nil {
 		return "", nil, false, err
 	}
 	return password, hash, true, nil
+}
+
+// writeAdminPasswordHash atomically stores the bcrypt hash with owner-only
+// permissions. The plaintext password is never written to disk.
+func writeAdminPasswordHash(path string, hash []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".admin-password-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := file.Write(hash); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func randomToken(bytes int) (string, error) {
