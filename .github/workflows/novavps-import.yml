@@ -1,0 +1,72 @@
+name: Import NovaVPS source archive
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "novavps/_source/source.tar.gz.b64"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Expand the NovaVPS release source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import gzip
+          import io
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          archive = Path("novavps/_source/source.tar.gz.b64")
+          if not archive.is_file():
+              raise SystemExit("Source archive staging file is missing.")
+
+          raw = base64.b64decode(archive.read_text().strip(), validate=True)
+          root = Path("novavps").resolve()
+          with tarfile.open(fileobj=io.BytesIO(gzip.decompress(raw)), mode="r:") as bundle:
+              for item in bundle.getmembers():
+                  rel = PurePosixPath(item.name)
+                  if rel.is_absolute() or not rel.parts or ".." in rel.parts:
+                      raise SystemExit(f"Unsafe archive path: {item.name}")
+                  destination = (root / Path(*rel.parts)).resolve()
+                  if destination != root and root not in destination.parents:
+                      raise SystemExit(f"Archive path escapes destination: {item.name}")
+                  if item.isdir():
+                      destination.mkdir(parents=True, exist_ok=True)
+                      continue
+                  if not item.isfile():
+                      raise SystemExit(f"Unsupported archive entry: {item.name}")
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  source = bundle.extractfile(item)
+                  if source is None:
+                      raise SystemExit(f"Could not read archive entry: {item.name}")
+                  destination.write_bytes(source.read())
+                  destination.chmod(0o755 if item.mode & 0o111 else 0o644)
+
+          archive.unlink()
+          print("NovaVPS source files extracted into novavps/.")
+          PY
+
+      - name: Commit complete NovaVPS source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A novavps
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git commit -m "Import complete NovaVPS v0.3.0-dev source"
+          git push
