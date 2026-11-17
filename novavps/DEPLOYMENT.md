@@ -41,7 +41,7 @@ The included `vercel.json` builds the Vite app from `web/`, publishes `web/dist`
 
 The proxy forwards the incoming HTTP method, path, query, request body, and session cookies to the trusted origin configured by the project owner. The browser continues to call the same-origin `/api/*` routes. The proxy is intentionally limited to 8 MiB request bodies because the current API accepts small JSON requests; large file transfer endpoints are not implemented yet.
 
-Vercel's WebSocket support is available for Functions, but WebSocket connections remain associated with Function lifecycle and platform limits. The current NovaVPS build does not yet implement its interactive terminal/WebSocket endpoint; this HTTP proxy is not presented as a finished terminal tunnel. See https://vercel.com/docs/limits.
+Vercel's WebSocket support is available for Functions, but WebSocket connections remain associated with Function lifecycle and platform limits. NovaVPS currently provides a single-line SSH command runner over ordinary HTTP requests; it is not an interactive terminal or persistent shell/WebSocket session. See https://vercel.com/docs/limits.
 
 ## 3. Netlify: dashboard + Edge Function API proxy
 
@@ -67,7 +67,19 @@ Do not put API credentials or SSH keys in `netlify.toml` or frontend build varia
 - Do not use Render Free's ephemeral local storage for saved SSH credentials.
 - Keep the repository's existing Pterodactyl/Cloud installer separate; the Render blueprint uses `novavps/` as its service root.
 
-## 5. Free-tier and feature boundaries
+## 5. Single-line SSH command runner
+
+The dashboard includes a **Command runner** for connected servers. Choose a saved server and submit one command line; NovaVPS opens a fresh SSH exec session using that server's saved SSH credentials and runs the command as the configured SSH user.
+
+- Multiline input and NUL bytes are rejected; the command limit is 2,048 bytes.
+- Each request has a 20-second server-side time limit. At timeout, NovaVPS closes the SSH session; whether the remote process fully stops depends on the SSH server and process behavior.
+- Combined standard output and error capture is limited to 48 KiB. Larger output is truncated.
+- The latest 10 results remain only in the current browser session. NovaVPS does not persist command text or output.
+- This is not an interactive terminal: it has no persistent shell state, TTY, streaming output, or interactive prompts. Every submission starts a new SSH exec request.
+
+Commands execute with the permissions of the saved SSH account and may change the remote machine. Run commands only on systems you own or are authorized to administer. Use a restricted SSH account with only the permissions needed for your tasks.
+
+## 6. Free-tier and feature boundaries
 
 The deployment files and NovaVPS software are free/open source. Hosting providers can change free quotas and may suspend or sleep free services. Vercel and Netlify deployments in this configuration are dashboard/API-proxy deployments; the Go management API must be reachable at `NOVAVPS_API_ORIGIN`. Render can run both the dashboard and Go API, but its Free service is for evaluation and does not provide persistent local storage.
 
