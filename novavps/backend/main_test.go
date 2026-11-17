@@ -154,3 +154,93 @@ func TestAdminUsernameAndPasswordValidation(t *testing.T) {
 		t.Fatalf("valid password rejected: %v", err)
 	}
 }
+
+
+func TestPanelUserLoginCreatesScopedSession(t *testing.T) {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("strong-test-user-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &App{
+		adminUsername: "owner",
+		adminHash:     []byte("unused-owner-hash"),
+		users: map[string]PanelUser{
+			"user-1": {ID: "user-1", Username: "member", PasswordHash: passwordHash, ServerIDs: []string{"server-a"}},
+		},
+		sessions: map[string]sessionRecord{},
+		servers: map[string]Server{
+			"server-a": {ID: "server-a", Name: "Assigned"},
+			"server-b": {ID: "server-b", Name: "Private"},
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"member","password":"strong-test-user-password"}`))
+	request.RemoteAddr = "198.51.100.20:1234"
+	response := httptest.NewRecorder()
+	a.login(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body=%s", response.Code, response.Body.String())
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("successful login did not set a session cookie")
+	}
+	session := a.sessions[cookies[0].Value]
+	if session.Role != "user" || session.UserID != "user-1" {
+		t.Fatalf("unexpected user session: %+v", session)
+	}
+	if !a.canAccessServer(session, "server-a") {
+		t.Fatal("user should access their assigned server")
+	}
+	if a.canAccessServer(session, "server-b") {
+		t.Fatal("user must not access an unassigned server")
+	}
+}
+
+func TestCreateUserPersistsOnlySelectedServerAccess(t *testing.T) {
+	dataDir := t.TempDir()
+	a := &App{
+		cfg: Config{DataDir: dataDir},
+		adminUsername: "owner",
+		users: map[string]PanelUser{},
+		servers: map[string]Server{
+			"server-a": {ID: "server-a", Name: "Assigned"},
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(`{"username":"member1","password":"strong-test-user-password","serverIds":["server-a"]}`))
+	response := httptest.NewRecorder()
+	a.createUser(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create user status = %d, body=%s", response.Code, response.Body.String())
+	}
+	var stored []PanelUser
+	if err := readJSON(filepath.Join(dataDir, "users.json"), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Username != "member1" || len(stored[0].PasswordHash) == 0 {
+		t.Fatalf("unexpected persisted user record: %+v", stored)
+	}
+	if len(stored[0].ServerIDs) != 1 || stored[0].ServerIDs[0] != "server-a" {
+		t.Fatalf("unexpected assigned servers: %+v", stored[0].ServerIDs)
+	}
+	if err := bcrypt.CompareHashAndPassword(stored[0].PasswordHash, []byte("strong-test-user-password")); err != nil {
+		t.Fatal("stored user password is not a bcrypt hash of the supplied password")
+	}
+}
+
+func TestCreateUserRejectsUnknownServerAssignment(t *testing.T) {
+	a := &App{
+		cfg: Config{DataDir: t.TempDir()},
+		adminUsername: "owner",
+		users: map[string]PanelUser{},
+		servers: map[string]Server{},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(`{"username":"member2","password":"strong-test-user-password","serverIds":["missing-server"]}`))
+	response := httptest.NewRecorder()
+	a.createUser(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("create user status = %d, want 400, body=%s", response.Code, response.Body.String())
+	}
+	if len(a.users) != 0 {
+		t.Fatal("invalid user assignment must not create an account")
+	}
+}
