@@ -1,0 +1,66 @@
+name: NovaVPS CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "novavps/**"
+      - ".github/workflows/novavps-ci.yml"
+  pull_request:
+    paths:
+      - "novavps/**"
+      - ".github/workflows/novavps-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.4"
+          cache: false
+      - name: Download Go modules
+        working-directory: novavps/backend
+        run: go mod download
+      - name: Test backend
+        working-directory: novavps/backend
+        run: go test ./...
+      - name: Vet backend
+        working-directory: novavps/backend
+        run: go vet ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.1"
+      - name: Install frontend dependencies
+        working-directory: novavps/web
+        run: npm install
+      - name: Build frontend
+        working-directory: novavps/web
+        run: npm run build
+      - name: Validate deployment manifests
+        working-directory: novavps
+        run: |
+          python3 -m json.tool vercel.json >/dev/null
+          python3 - <<'PY'
+          import yaml
+          with open("render.yaml", encoding="utf-8") as stream:
+              yaml.safe_load(stream)
+          print("Render and Vercel manifests are valid.")
+          PY
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build NovaVPS container
+        run: docker build -t novavps:ci ./novavps
