@@ -18,6 +18,26 @@ ok() { printf "${GREEN}[ OK ]${NC} %s\n" "$*"; }
 warn() { printf "${YELLOW}[WARN]${NC} %s\n" "$*"; }
 fail() { printf "${RED}[FAIL]${NC} %s\n" "$*" >&2; exit 1; }
 
+# A one-line install can pipe this script directly to bash. In that case the
+# project files are not beside the script, so fetch the matching repository
+# archive and re-run the installer from the complete novavps source directory.
+if [[ ! -f "$SOURCE_DIR/docker-compose.yml" || ! -f "$SOURCE_DIR/Dockerfile" ]]; then
+  [[ "$EUID" -eq 0 ]] || fail "Run the installer as root: curl ... | sudo bash"
+  command -v curl >/dev/null 2>&1 || fail "curl is required for the one-command installer. Install curl and retry."
+  command -v tar >/dev/null 2>&1 || fail "tar is required to extract the NovaVPS source."
+  BOOTSTRAP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$BOOTSTRAP_DIR"' EXIT
+  info "Downloading the latest NovaVPS source from the official repository"
+  curl -fsSL --retry 3 --retry-delay 2 \
+    "https://github.com/kritikakumari0972-bit/Cloud/archive/refs/heads/main.tar.gz" \
+    -o "$BOOTSTRAP_DIR/novavps-source.tar.gz"
+  tar -xzf "$BOOTSTRAP_DIR/novavps-source.tar.gz" -C "$BOOTSTRAP_DIR"
+  BOOTSTRAP_SOURCE="$(dirname "$(find "$BOOTSTRAP_DIR" -type f -path '*/novavps/docker-compose.yml' -print -quit)")"
+  [[ -f "$BOOTSTRAP_SOURCE/install.sh" ]] || fail "The downloaded archive did not contain the NovaVPS installer."
+  bash "$BOOTSTRAP_SOURCE/install.sh" "$@"
+  exit $?
+fi
+
 usage() {
   cat <<'USAGE'
 NovaVPS installer
@@ -155,10 +175,16 @@ else
   printf "${YELLOW}Remote access:${NC} create an SSH tunnel: ssh -L 8080:127.0.0.1:8080 USER@SERVER\n"
 fi
 printf "${GREEN}Management command:${NC} novavps\n"
-printf "${GREEN}First-run account setup:${NC} open the panel and create your own username and password.\n"
+printf "${GREEN}First-run account setup:${NC} open the panel and create your owner username and password.\n"
+printf "${GREEN}Additional accounts:${NC} sign in as owner, then open User accounts in the panel sidebar.\n"
 if [[ -f "$INSTALL_DIR/.public-mode" ]]; then
   printf "${YELLOW}Setup access:${NC} create an SSH tunnel to localhost before creating the first account.\n"
 else
   printf "${YELLOW}Setup URL:${NC} http://127.0.0.1:8080\n"
 fi
 printf "\n${CYAN}Run 'novavps' to open the interactive manager.${NC}\n"
+# Open the management menu when a controlling terminal is available, including
+# curl | sudo bash invocations where stdin is the script rather than the TTY.
+if [[ -r /dev/tty && -w /dev/tty ]]; then
+  /usr/local/bin/novavps </dev/tty >/dev/tty 2>&1 || true
+fi
