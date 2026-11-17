@@ -195,7 +195,9 @@ func (a *App) updateUser(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, http.StatusNotFound, map[string]string{"error": "user_not_found"})
 		return
 	}
-	serverIDs := append([]string(nil), user.ServerIDs...)
+	previous := user
+	previous.PasswordHash = append([]byte(nil), user.PasswordHash...)
+	previous.ServerIDs = append([]string(nil), user.ServerIDs...)
 	if body.ServerIDs != nil {
 		serverIDs, err := validateServerAssignmentsLocked(a.servers, body.ServerIDs)
 		if err != nil {
@@ -204,6 +206,17 @@ func (a *App) updateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user.ServerIDs = serverIDs
+	}
+	if len(newHash) > 0 {
+		user.PasswordHash = newHash
+	}
+	a.users[id] = user
+	err := a.savePanelUsersLocked()
+	if err != nil {
+		a.users[id] = previous
+		a.mu.Unlock()
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "user_storage_failed"})
+		return
 	}
 	if len(newHash) > 0 {
 		user.PasswordHash = newHash
