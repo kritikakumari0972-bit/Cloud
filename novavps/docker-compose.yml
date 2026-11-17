@@ -1,0 +1,39 @@
+services:
+  novavps:
+    build: .
+    container_name: novavps
+    restart: unless-stopped
+    ports:
+      # Private by default. Use the optional Caddy profile for public HTTPS.
+      - "127.0.0.1:8080:8080"
+    environment:
+      NOVAVPS_ADDR: ":8080"
+      NOVAVPS_DATA_DIR: "/app/data"
+      NOVAVPS_WEB_DIR: "/app/web/dist"
+      NOVAVPS_COOKIE_SECURE: ${NOVAVPS_COOKIE_SECURE:-false}
+      NOVAVPS_ADMIN_PASSWORD: ${NOVAVPS_ADMIN_PASSWORD:-}
+    volumes:
+      - novavps_data:/app/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: novavps-caddy
+    profiles: ["public"]
+    restart: unless-stopped
+    depends_on:
+      - novavps
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      NOVAVPS_DOMAIN: ${NOVAVPS_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  novavps_data:
+  caddy_data:
+  caddy_config:
