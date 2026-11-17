@@ -8,5 +8,5 @@
       "destination": "/index.html"
     }
   ],
-  "installCommand": "cd web && npm ci"
+  "installCommand": "cd web && npm install"
 }

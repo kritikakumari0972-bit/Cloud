@@ -1,5 +1,5 @@
 [build]
-  command = "cd web && npm ci && npm run build"
+  command = "cd web && npm install && npm run build"
   publish = "web/dist"
   edge_functions = "netlify/edge-functions"
 

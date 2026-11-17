@@ -80,7 +80,7 @@ From `novavps/`:
 ```bash
 # Frontend production build
 cd web
-npm ci
+npm install
 npm run build
 cd ..
 
