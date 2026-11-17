@@ -4,7 +4,7 @@ NovaVPS is an open-source, self-hosted control panel for connecting and managing
 
 > Early development build. This is not yet a production multi-tenant cloud platform. Browser terminal, SFTP file manager, outbound agent, provider APIs, KVM/libvirt provisioning, routed public IP attachment, user registration, RBAC, and audit history remain future milestones.
 
-## Cloud-style installation
+## Deployment targets\n\nNovaVPS includes deployment profiles for Vercel, Netlify, and Render. Vercel and Netlify host the web dashboard and proxy `/api/*` to a separately hosted Go API; Render can host the Go API and dashboard together. See [DEPLOYMENT.md](DEPLOYMENT.md) for setup instructions and free-tier limitations.\n\n## Cloud-style installation
 
 This release adopts the interactive one-command installation workflow from the owner's `Cloud` repository, but installs NovaVPS itself rather than Pterodactyl. It does not reuse Cloud's external scripts or their credentials/configuration.
 

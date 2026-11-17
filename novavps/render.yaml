@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: novavps-control-panel
+    runtime: docker
+    plan: free
+    region: singapore
+    rootDir: novavps
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: NOVAVPS_ADDR
+        value: 0.0.0.0:10000
+      - key: NOVAVPS_DATA_DIR
+        value: /app/data
+      - key: NOVAVPS_WEB_DIR
+        value: /app/web/dist
+      - key: NOVAVPS_COOKIE_SECURE
+        value: "true"
+      - key: NOVAVPS_ADMIN_PASSWORD
+        generateValue: true

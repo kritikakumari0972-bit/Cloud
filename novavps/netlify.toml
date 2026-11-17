@@ -1,0 +1,13 @@
+[build]
+  command = "cd web && npm ci && npm run build"
+  publish = "web/dist"
+  edge_functions = "netlify/edge-functions"
+
+[[edge_functions]]
+  function = "api-proxy"
+  path = "/api/*"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
