@@ -32,7 +32,9 @@ if [[ ! -f "$SOURCE_DIR/docker-compose.yml" || ! -f "$SOURCE_DIR/Dockerfile" ]];
     "https://github.com/kritikakumari0972-bit/Cloud/archive/refs/heads/main.tar.gz" \
     -o "$BOOTSTRAP_DIR/novavps-source.tar.gz"
   tar -xzf "$BOOTSTRAP_DIR/novavps-source.tar.gz" -C "$BOOTSTRAP_DIR"
-  BOOTSTRAP_SOURCE="$(dirname "$(find "$BOOTSTRAP_DIR" -type f -path '*/novavps/docker-compose.yml' -print -quit)")"
+  BOOTSTRAP_MANIFEST="$(find "$BOOTSTRAP_DIR" -type f -path '*/novavps/docker-compose.yml' -print -quit)"
+  [[ -n "$BOOTSTRAP_MANIFEST" ]] || fail "The downloaded archive did not contain the NovaVPS project."
+  BOOTSTRAP_SOURCE="$(dirname "$BOOTSTRAP_MANIFEST")"
   [[ -f "$BOOTSTRAP_SOURCE/install.sh" ]] || fail "The downloaded archive did not contain the NovaVPS installer."
   bash "$BOOTSTRAP_SOURCE/install.sh" "$@"
   exit $?
