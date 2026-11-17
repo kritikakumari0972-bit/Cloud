@@ -80,7 +80,7 @@ func TestFreshInstallWaitsForOwnerSetup(t *testing.T) {
 
 func TestSetupAdminCreatesLocalAccountAndOnlyOnce(t *testing.T) {
 	dataDir := t.TempDir()
-	a := &App{cfg: Config{DataDir: dataDir}, sessions: map[string]time.Time{}}
+	a := &App{cfg: Config{DataDir: dataDir}, sessions: map[string]sessionRecord{}}
 	payload := `{"username":"owner.name","password":"a-very-strong-test-password","confirmPassword":"a-very-strong-test-password"}`
 
 	request := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(payload))
