@@ -155,6 +155,10 @@ else
   printf "${YELLOW}Remote access:${NC} create an SSH tunnel: ssh -L 8080:127.0.0.1:8080 USER@SERVER\n"
 fi
 printf "${GREEN}Management command:${NC} novavps\n"
-printf "${GREEN}First-start password (if generated):${NC}\n"
-docker compose "${COMPOSE_ARGS[@]}" logs --no-color novavps 2>&1 | grep -F 'FIRST START ADMIN PASSWORD' | tail -n 1 || true
-printf "\n${CYAN}Run 'novavps' to open the interactive manager.${NC}\n
+printf "${GREEN}First-run account setup:${NC} open the panel and create your own username and password.\n"
+if [[ -f "$INSTALL_DIR/.public-mode" ]]; then
+  printf "${YELLOW}Setup access:${NC} create an SSH tunnel to localhost before creating the first account.\n"
+else
+  printf "${YELLOW}Setup URL:${NC} http://127.0.0.1:8080\n"
+fi
+printf "\n${CYAN}Run 'novavps' to open the interactive manager.${NC}\n"
