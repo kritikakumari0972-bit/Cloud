@@ -2,28 +2,39 @@
 
 NovaVPS is an open-source, self-hosted control panel for connecting and managing Linux servers you already own or are authorized to administer. It provides agentless SSH enrollment, encrypted credential storage, host-key pinning, basic server metrics, and an IPv4/IPv6 IPAM inventory for provider-authorized address ranges.
 
-> Early development build. This is not yet a production multi-tenant cloud platform. Browser terminal, SFTP file manager, outbound agent, provider APIs, KVM/libvirt provisioning, routed public IP attachment, user registration, RBAC, and audit history remain future milestones.
+> Early development build. This is not yet a production cloud platform. It now supports an owner account plus separate panel users with per-server assignments. A full interactive browser terminal, SFTP file manager, outbound agent, provider APIs, KVM/libvirt provisioning, routed public IP attachment, fine-grained roles, and durable audit history remain future milestones.
 
-## Deployment targets\n\nNovaVPS includes deployment profiles for Vercel, Netlify, and Render. Vercel and Netlify host the web dashboard and proxy `/api/*` to a separately hosted Go API; Render can host the Go API and dashboard together. See [DEPLOYMENT.md](DEPLOYMENT.md) for setup instructions and free-tier limitations.\n\n## Cloud-style installation
+## Deployment targets\n\nNovaVPS includes deployment profiles for Vercel, Netlify, and Render. Vercel and Netlify host the web dashboard and proxy `/api/*` to a separately hosted Go API; Render can host the Go API and dashboard together. See [DEPLOYMENT.md](DEPLOYMENT.md) for setup instructions and free-tier limitations.\n\n## One-command installation
 
-This release adopts the interactive one-command installation workflow from the owner's `Cloud` repository, but installs NovaVPS itself rather than Pterodactyl. It does not reuse Cloud's external scripts or their credentials/configuration.
+On a supported Ubuntu/Debian machine, run:
 
-1. Download and extract the complete NovaVPS release ZIP onto an Ubuntu or Debian machine.
-2. Run the installer from the extracted project directory:
+```bash
+curl -fsSL https://raw.githubusercontent.com/kritikakumari0972-bit/Cloud/main/novavps/install.sh | sudo bash
+```
+
+The installer downloads the NovaVPS source, installs Docker Engine and the Compose plugin if needed, copies the project to `/opt/novavps`, creates the `novavps` management command, builds the containers, and starts the panel. When a terminal is available, the interactive terminal menu opens automatically. You can also run `sudo novavps` later.
+
+To install from an already-extracted source tree instead:
 
 ```bash
 sudo bash ./install.sh
 ```
 
-The installer checks root permissions and OS support, installs Docker Engine and the official Docker Compose plugin if needed, copies NovaVPS to `/opt/novavps`, creates a command named `novavps`, builds the application, and starts it.
+The default profile binds the panel to `127.0.0.1:8080` only. For remote users, configure a domain with DNS pointing to this machine and install the HTTPS profile:
 
-Open the local panel at `http://127.0.0.1:8080`. On a remote host, use an SSH tunnel:
+```bash
+curl -fsSL https://raw.githubusercontent.com/kritikakumari0972-bit/Cloud/main/novavps/install.sh | sudo bash -s -- --public --domain panel.example.com
+```
+
+For a remote first-run setup, use an SSH tunnel to the host's localhost port, then visit `http://127.0.0.1:8080` on the device running the browser:
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 USER@YOUR_SERVER
 ```
 
-Then open `http://127.0.0.1:8080` on your own device. On first launch, open the panel and create the administrator username and password yourself. The account-creation screen is available only through localhost. For a remote Ubuntu/Debian machine, create the SSH tunnel shown above and open the local URL in your browser. The first account is the single owner account for that installation; separate user accounts and roles are not implemented yet.
+Create the owner username and password through the first-run panel page. After signing in, open **User accounts** in the sidebar to create or delete additional panel users. Each account receives its own username/password and can be assigned selected connected machines. Users sign in at the same panel URL and only see their assigned machines.
+
+A user command runs over SSH as the SSH username saved for that machine. If the owner enrolled the machine using the `root` SSH account, the user's commands execute with that machine's root privileges. This is powerful access: only assign servers to people who are trusted and authorized to administer them. The current feature is a bounded single-command runner, not an interactive root shell.
 
 ### Optional public HTTPS
 
@@ -67,7 +78,7 @@ novavps help            Show help
 
 ## Current capabilities
 
-- Private administrator sign-in (single-owner bootstrap).
+- Private owner sign-in plus separate panel users with hashed passwords, server assignment, and session revocation on account deletion.
 - Add multiple Linux servers through SSH.
 - Password or SSH private-key authentication.
 - First-connection SSH host-key fingerprint confirmation.
@@ -140,7 +151,7 @@ The Vite development server proxies `/api` to `http://localhost:8080`.
 ## Security notes and limitations
 
 - Credentials are encrypted with an AES-256-GCM key stored in the data volume with restrictive file permissions. Back up the entire data volume securely; losing `encryption.key` makes saved credentials unrecoverable.
-- The bootstrap administrator password is randomly generated and printed once; only its bcrypt hash is stored in the data volume with mode `0600`. The current build is single-administrator, not public multi-user authentication.
+- The first owner creates a username and password through the local first-run setup screen. Additional panel users are managed by the owner; only bcrypt password hashes are persisted in `users.json` with restrictive file permissions.
 - The browser never stores SSH credentials in local storage. Secrets are submitted over the panel origin and encrypted before persistence.
 - The current SSH metrics endpoint runs only fixed, application-defined read-only commands. An interactive shell is not implemented yet.
 - Avoid using the root account when a restricted sudo-capable account is sufficient. Use dedicated SSH keys and revoke keys when access is no longer needed.
@@ -158,7 +169,7 @@ The Vite development server proxies `/api` to `http://localhost:8080`.
 7. Routed IPv6 and provider-supported dedicated IPv4 attachment through the node agent, with verified connectivity checks.
 8. Shared IPv4 NAT gateway and optional relay connectivity, clearly distinguished from dedicated public addresses.
 9. Provider API integrations with user-supplied credentials and least-privilege scopes.
-10. Multi-user accounts, roles, project isolation, and audit logs.
+10. Fine-grained roles, project isolation, durable audit logs, and full interactive browser terminal.
 
 ## License
 
