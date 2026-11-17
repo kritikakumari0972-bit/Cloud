@@ -1,0 +1,4 @@
+{$NOVAVPS_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy novavps:8080
+}
