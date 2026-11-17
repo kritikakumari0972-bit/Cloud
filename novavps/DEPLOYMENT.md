@@ -60,17 +60,25 @@ Do not put API credentials or SSH keys in `netlify.toml` or frontend build varia
 
 On a clean local installation, leave `NOVAVPS_ADMIN_PASSWORD` unset. Start NovaVPS and open it from the same machine at `http://127.0.0.1:8080`. The first-run screen asks the owner to create a username and password. Usernames may contain 3–32 letters, numbers, dots, dashes, or underscores. Passwords must contain at least 12 characters and no more than 72 UTF-8 bytes.
 
-The username is stored in `admin_username`; the password is stored only as a bcrypt hash in `admin_password.hash` inside the NovaVPS data directory. The setup endpoint accepts the first account only and only from a loopback connection, preventing an internet visitor from claiming a fresh installation. Keep the data directory private and back it up securely.
+The username is stored in `admin_username`; the password is stored only as a bcrypt hash in `admin_password.hash` inside the NovaVPS data directory. The setup endpoint accepts the first account only. A manual development deployment without an installer token accepts setup only from loopback.
 
-For a NovaVPS instance installed on a remote machine, create an SSH port-forward from your own computer before opening the setup page:
+The supported installer generates a random 256-bit `NOVAVPS_SETUP_TOKEN`, stores it in the root-only `/opt/novavps/.env` file, and passes it to the API container. This also handles Docker networking, where a request forwarded from the host's localhost port may not appear as loopback inside the container. Retrieve it on the installation host using:
 
 ```bash
-ssh -L 8080:127.0.0.1:8080 your-user@your-machine
+sudo novavps setup-token
 ```
 
-Then visit `http://127.0.0.1:8080` in your local browser. The browser-to-NovaVPS setup request reaches the service through the loopback tunnel. Once the account has been created, future logins use the username and password chosen during setup.
+Enter that token in the first-run owner setup form. Keep it private; it is only needed until the first owner account has been created. The setup endpoint refuses subsequent owner creation even if the token is known.
+
+For an owner connecting to a remote machine, use the configured HTTPS panel URL or create an SSH port-forward to the host's local port. After creating the owner account, the owner signs in and creates additional user accounts from **User accounts**, assigning each user only the servers they should manage.
 
 For hosted deployments that set `NOVAVPS_ADMIN_PASSWORD` (including the supplied Render Blueprint), the setup screen is disabled and the username remains `admin` unless explicitly changed in a later account-management feature.
+
+## Panel users and machine access
+
+After owner setup, the owner can create and delete additional accounts from the dashboard's **User accounts** page. Each account has a separate bcrypt password hash and can be assigned specific connected servers. A user signs in at the same panel URL and only sees the machines assigned to their account. Deleting an account revokes its active sessions.
+
+The bounded Command runner executes as the SSH username stored for the selected machine. If the saved SSH account is `root`, the command runs with root privileges on that remote host. This is not yet an interactive browser shell or a full remote desktop; it is one command per request with a time limit and output cap. Assign root-connected machines only to people authorized to administer them.
 
 ## 4. Shared configuration and security
 
