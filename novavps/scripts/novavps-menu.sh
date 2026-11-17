@@ -65,6 +65,20 @@ url_cmd() {
   fi
 }
 
+users_cmd() {
+  echo -e "${CYAN}NovaVPS panel accounts${NC}"
+  echo "Create and delete accounts from the signed-in owner's web dashboard:"
+  echo "  Open the panel URL, sign in as the owner, then select User accounts."
+  echo
+  url_cmd
+  if [[ ! -f "$PUBLIC_FLAG" ]]; then
+    echo
+    warn "This install is local-only. Other devices cannot reach this URL."
+    echo "For remote team access, configure a domain with HTTPS:"
+    echo "  sudo bash $APP_DIR/install.sh --public --domain panel.example.com"
+  fi
+}
+
 backup_cmd() {
   local container_id volume_name stamp
   container_id=$(compose ps -q novavps | head -n1)
@@ -133,6 +147,7 @@ NovaVPS command
   novavps status          Show service and API status
   novavps logs            Follow service logs
   novavps url             Show panel URL / SSH tunnel hint
+  novavps users           Show the panel user-management page
   novavps backup          Back up persistent application data
   novavps update          Update a Git checkout, if present
   novavps doctor          Print diagnostics
@@ -166,6 +181,7 @@ menu() {
     echo -e "  ${GREEN}4)${NC} Status              ${GRAY}:: Container and API health${NC}"
     echo -e "  ${GREEN}5)${NC} Logs                ${GRAY}:: Follow application logs${NC}"
     echo -e "  ${GREEN}6)${NC} Panel URL           ${GRAY}:: Show access address${NC}"
+    echo -e "  ${GREEN}12)${NC} User accounts       ${GRAY}:: Open account-management guidance${NC}"
     echo ""
     echo -e "${YELLOW}  [ MAINTENANCE ]${NC}"
     echo -e "  ${GREEN}7)${NC} Backup data         ${GRAY}:: Save encrypted app data${NC}"
@@ -176,7 +192,7 @@ menu() {
     echo -e "${CYAN}──────────────────────────────────────────────────────────────${NC}"
     echo -e "  ${RED}0) Exit${NC}"
     echo
-    read -r -p "${GREEN}➜ Select option [0-11]: ${NC}" choice
+    read -r -p "${GREEN}➜ Select option [0-12]: ${NC}" choice
     case "$choice" in
       1) start_cmd; pause ;;
       2) stop_cmd; pause ;;
@@ -189,6 +205,7 @@ menu() {
       9) doctor_cmd; pause ;;
       10) uninstall_cmd; pause ;;
       11) purge_cmd; pause ;;
+      12) users_cmd; pause ;;
       0) echo -e "${GREEN}NovaVPS manager closed.${NC}"; exit 0 ;;
       *) warn "Invalid option."; sleep 1 ;;
     esac
@@ -203,6 +220,7 @@ case "${1:-menu}" in
   status) status_cmd ;;
   logs) logs_cmd ;;
   url) url_cmd ;;
+  users) users_cmd ;;
   backup) backup_cmd ;;
   update) update_cmd ;;
   doctor) doctor_cmd ;;
